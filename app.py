@@ -705,7 +705,7 @@ if (st.session_state.get('paso2_completo') and
                         fila_infraccion = df_tipificacion[df_tipificacion['ID_Infraccion'] == id_infraccion_actual]
                         
                         id_plantilla_infraccion = fila_infraccion.iloc[0].get('ID_Plantilla_BI')
-                        buffer_plantilla_infraccion = descargar_archivo_drive(id_plantilla_infraccion, RUTA_CREDENCIALES_GCP)
+                        buffer_plantilla_infraccion = descargar_archivo_drive(id_plantilla_infraccion)
                         archivo_analisis_subido = datos_hecho.get('doc_adjunto_hecho')
                         
                         buffer_seccion_unida = io.BytesIO()
@@ -752,7 +752,7 @@ if (st.session_state.get('paso2_completo') and
                         # Tarea 3: Preparar el Anexo de Costo Evitado para este hecho
                         id_plantilla_anexo_ce = fila_infraccion.iloc[0].get('ID_Plantilla_CE')
                         if id_plantilla_anexo_ce:
-                            buffer_anexo_ce = descargar_archivo_drive(id_plantilla_anexo_ce, RUTA_CREDENCIALES_GCP)
+                            buffer_anexo_ce = descargar_archivo_drive(id_plantilla_anexo_ce)
                             if buffer_anexo_ce:
                                 anexo_ce_tpl = DocxTemplate(buffer_anexo_ce)
                                 anexo_ce_tpl.render(contexto_del_hecho, autoescape=True)
@@ -895,7 +895,7 @@ if (st.session_state.get('paso2_completo') and
                         # Bucle para descargar y añadir cada anexo de Drive
                         for i, file_id in enumerate(lista_ids_anexos):
                             try:
-                                anexo_drive_buffer = descargar_archivo_drive(file_id, RUTA_CREDENCIALES_GCP)
+                                anexo_drive_buffer = descargar_archivo_drive(file_id)
                                 if anexo_drive_buffer:
                                     compositor_final.append(Document(anexo_drive_buffer))
                                     st.write(f"    ✓ Anexo de Drive `{file_id[:10]}...` añadido.")
@@ -942,4 +942,5 @@ if not cliente_gspread:
     st.error(
 
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
+
 
