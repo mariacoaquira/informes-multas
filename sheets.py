@@ -8,7 +8,6 @@ from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseDownload
 from num2words import num2words
-import json
 
 # ----------------------------------------------------------------------
 #  CONFIGURACIÓN Y VARIABLES GLOBALES DE DATOS
@@ -21,38 +20,19 @@ NOMBRE_GSHEET_ASIGNACIONES = "Base de asignaciones de multas"
 #  FUNCIONES DE DATOS
 # --------------------------------------------------------------------
 
-# sheets.py
-
 import streamlit as st
-import gspread
-from google.oauth2.service_account import Credentials
-import json # <-- Asegúrate de que esta importación esté al principio
 
-# ...
-
-# REEMPLAZA TU FUNCIÓN conectar_gsheet CON ESTA VERSIÓN
 @st.cache_resource(show_spinner="Conectando a Google Sheets...")
 def conectar_gsheet():
     """Establece conexión con la API de Google Sheets usando los secretos de Streamlit."""
     try:
-        # --- INICIO DE LA CORRECCIÓN ---
-        # 1. Lee el secreto de Streamlit (que es un bloque de texto/string)
-        creds_str = st.secrets["gcp_service_account"]
+        # Streamlit ahora nos entrega un diccionario directamente
+        creds_dict = st.secrets["gcp_service_account"]
         
-        # 2. Convierte ese texto en un diccionario de Python
-        creds_dict = json.loads(creds_str)
-        # --- FIN DE LA CORRECCIÓN ---
-
         scopes = ["https://www.googleapis.com/auth/spreadsheets", "https://www.googleapis.com/auth/drive"]
-        
-        # 3. Ahora, la función recibe el diccionario que esperaba
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
         return client
-        
-    except json.JSONDecodeError:
-        st.error("Error de formato en el secreto 'gcp_service_account'. Asegúrate de haber copiado y pegado el contenido completo de tu archivo credentials.json.")
-        return None
     except Exception as e:
         st.error(f"Error al conectar con Google Sheets usando los secretos: {e}")
         return None
@@ -400,3 +380,4 @@ def get_person_details_by_base_name(nombre_base, df_analistas_func):
             }
             return {k: (v if v is not None else '') for k, v in details.items()}
     return {'titulo': '', 'nombre': '', 'cargo': '', 'colegiatura': ''}
+
