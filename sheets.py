@@ -60,20 +60,29 @@ def convertir_porcentaje(valor_str):
         return float(valor_str.replace('%', '').strip()) / 100
     return float(valor_str or 0)
 
-def descargar_archivo_drive(file_id, credentials_path):
-    """Descarga un archivo de Google Drive y lo devuelve como un buffer en memoria."""
+def descargar_archivo_drive(file_id): # Ya no necesita 'credentials_path'
+    """
+    Descarga un archivo de Google Drive usando los secretos de Streamlit.
+    """
     try:
-        drive_creds = Credentials.from_service_account_file(
-            credentials_path,
+        # Lee las credenciales desde los secretos de Streamlit
+        creds_dict = st.secrets["gcp_service_account"]
+        
+        # Crea las credenciales desde el diccionario, no desde un archivo
+        drive_creds = Credentials.from_service_account_info(
+            creds_dict,
             scopes=["https://www.googleapis.com/auth/drive.readonly"]
         )
         drive_service = build('drive', 'v3', credentials=drive_creds)
+
         request = drive_service.files().get_media(fileId=file_id)
         file_buffer = io.BytesIO()
         downloader = MediaIoBaseDownload(file_buffer, request)
+
         done = False
         while not done:
             status, done = downloader.next_chunk()
+
         file_buffer.seek(0)
         return file_buffer
     except Exception as e:
@@ -380,4 +389,5 @@ def get_person_details_by_base_name(nombre_base, df_analistas_func):
             }
             return {k: (v if v is not None else '') for k, v in details.items()}
     return {'titulo': '', 'nombre': '', 'cargo': '', 'colegiatura': ''}
+
 
