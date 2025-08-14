@@ -566,7 +566,7 @@ if (st.session_state.get('paso2_completo') and
         template_file_buffer = None
         if id_plantilla:
             with st.spinner(f"Cargando plantilla ({id_plantilla[:10]}...) desde Google Drive..."):
-                template_file_buffer = descargar_archivo_drive(id_plantilla, RUTA_CREDENCIALES_GCP)
+                template_file_buffer = descargar_archivo_drive(id_plantilla)
 
         # Muestra el botón final, que activará toda la lógica de creación de documentos.
         if template_file_buffer and st.button("🚀 Generar Informe", type="primary"):
@@ -942,3 +942,4 @@ if not cliente_gspread:
     st.error(
 
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
+
