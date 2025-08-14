@@ -1,6 +1,7 @@
 import streamlit as st
 import io
 import locale
+from babel.dates import format_date 
 from datetime import datetime, date, timedelta
 from dateutil.relativedelta import relativedelta
 import pandas as pd
@@ -64,8 +65,10 @@ if cliente_gspread:
 
         fecha_actual = datetime.now()
         fecha_anterior = fecha_actual - relativedelta(months=1)
-        nombre_hoja_actual = fecha_actual.strftime("%B %Y").capitalize()
-        nombre_hoja_anterior = fecha_anterior.strftime("%B %Y").capitalize()
+      
+        nombre_hoja_actual = format_date(fecha_actual, "MMMM yyyy", locale='es').capitalize()
+        nombre_hoja_anterior = format_date(fecha_anterior, "MMMM yyyy", locale='es').capitalize()
+        
         hojas_disponibles = [nombre_hoja_actual, nombre_hoja_anterior]
         mes_seleccionado = st.selectbox("Selecciona el mes de la asignación:", options=hojas_disponibles)
 
@@ -937,4 +940,5 @@ if (st.session_state.get('paso2_completo') and
 
 if not cliente_gspread:
     st.error(
+
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
