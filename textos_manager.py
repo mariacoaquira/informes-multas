@@ -8,11 +8,11 @@ FUENTES_TEMPLATES = {
     ),
     'periodo_bi': (
         "El periodo de capitalización es contabilizado a partir del primer día calendario siguiente a la "
-        "fecha límite en que se debio presentar la documentación ({fecha_incumplimiento_texto}) hasta la fecha del cálculo de la multa({fecha_hoy})."
+        "fecha límite en que se debio presentar la documentación ({fecha_incumplimiento_texto}) hasta la fecha del cálculo de la multa ({fecha_hoy_texto})."
     ),
     'periodo_bi_ext': (
         "El periodo de capitalización es contabilizado a partir del primer día calendario siguiente a la "
-        "fecha límite en que se debio presentar la documentación ({fecha_incumplimiento_texto}) hasta la fecha de cumplimiento extemporáneo ({fecha_extemporanea_texto})."
+        "fecha límite en que se debió presentar la documentación ({fecha_incumplimiento_texto}) hasta la fecha de cumplimiento extemporáneo ({fecha_extemporanea_texto})."
     ),
     'bcrp': (
         "Banco Central de Reserva del Perú (BCRP). Series Estadísticas. Tipo de Cambio Nominal Bancario-Promedio "
