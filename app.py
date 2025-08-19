@@ -181,10 +181,14 @@ if cliente_gspread:
                 df_indices_final = cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Indices_BCRP")
 
                 # 2. Crear el diccionario de datos GENERALES ('context_data')
+                fecha_actual = date.today()
+                fecha_rsd_dt = st.session_state.get('fecha_rsd') or fecha_actual
+
                 context_data = {
-                    'fecha_hoy': date.today().strftime('%d de %B de %Y'),
-                    # --- AÑADE ESTA LÍNEA ---
-                    'mes_hoy': date.today().strftime('%B de %Y').lower()
+                    # --- LÍNEAS MODIFICADAS ---
+                    'fecha_hoy': format_date(fecha_actual, "d 'de' MMMM 'de' yyyy", locale='es'),
+                    'mes_hoy': format_date(fecha_actual, "MMMM 'de' yyyy", locale='es').lower(),
+                    'fecha_rsd_texto': format_date(fecha_rsd_dt, "d 'de' MMMM 'de' yyyy", locale='es'),
                 }
 
                 # Obtener nombre completo del administrado
@@ -266,7 +270,7 @@ if cliente_gspread:
                                                                         dayfirst=True, errors='coerce')
                         latest_date = df_indices_final['Indice_Mes_dt'].max()
                         if pd.notna(latest_date):
-                            mes_indice_texto = latest_date.strftime('%B %Y').lower()
+                            mes_indice_texto = format_date(latest_date, 'MMMM yyyy', locale='es').lower()
                     except Exception:
                         pass  # Si hay error, se queda como "No disponible"
                 context_data['mes_indice'] = mes_indice_texto
@@ -440,8 +444,28 @@ if cliente_gspread:
                     
                     # --- Mostrar Tabla de Beneficio Ilícito ---
                     st.markdown("###### Beneficio Ilícito (BI)")
-                    df_bi = pd.DataFrame(resultados_app.get('bi_data_raw', []))
-                    st.dataframe(df_bi.style.hide(axis="index"), use_container_width=True)
+                    df_bi_crudo = pd.DataFrame(resultados_app.get('bi_data_raw', []))
+
+                    # --- INICIO DE LA MODIFICACIÓN ---
+                    if not df_bi_crudo.empty:
+                        # 1. Seleccionamos solo las columnas que queremos mostrar
+                        columnas_a_mostrar = ['descripcion', 'monto']
+                        
+                        # 2. Creamos un nuevo DataFrame solo con esas columnas
+                        df_bi_display = df_bi_crudo[columnas_a_mostrar]
+                        
+                        # 3. Renombramos las columnas para una mejor presentación
+                        df_bi_display = df_bi_display.rename(columns={
+                            'descripcion': 'Descripción',
+                            'monto': 'Monto'
+                        })
+                        
+                        # 4. Mostramos el DataFrame limpio
+                        st.dataframe(df_bi_display.style.hide(axis="index"), use_container_width=True)
+                    else:
+                        # Si no hay datos, muestra una tabla vacía como antes
+                        st.dataframe(df_bi_crudo)
+                    # --- FIN DE LA MODIFICACIÓN ---
 
                     # --- Mostrar Tabla de Multa ---
                     st.markdown("###### Multa Propuesta")
@@ -479,27 +503,30 @@ if all_steps_complete:
                     multa_total_uit = 0
                     lista_hechos_para_plantilla = []
 
-                    # --- ASEGÚRATE DE QUE ESTE BUCLE ESTÉ ASÍ ---
                     for i, datos_hecho in enumerate(st.session_state.imputaciones_data, 1):
                         lista_hechos_para_plantilla.append({
                             'numero_imputado': i,
                             'descripcion': datos_hecho.get('texto_hecho', '')
                         })
 
-                        # Esta es la parte CRÍTICA:
-                        # Busca el resultado en el diccionario anidado correcto
                         resultados_hecho = datos_hecho.get('resultados', {}).get('resultados_para_app', {})
-                        multa_de_este_hecho = resultados_hecho.get('multa_final_uit', 0)
                         
-                        multa_total_uit += multa_de_este_hecho
+                        # 1. Obtenemos el valor de la multa con todos sus decimales
+                        multa_de_este_hecho_float = resultados_hecho.get('multa_final_uit', 0)
+                        
+                        # 2. Redondeamos el valor individual a 3 decimales
+                        multa_de_este_hecho_redondeada = round(multa_de_este_hecho_float, 3)
+                        
+                        # 3. Sumamos el valor YA redondeado al total
+                        multa_total_uit += multa_de_este_hecho_redondeada
                         
                         summary_rows.append({
                             'numeral': f"IV.{i + 1}", 
                             'infraccion': f"Hecho imputado n.° {i}",
-                            'multa': f"{multa_de_este_hecho:,.3f} UIT"
+                            'multa': f"{multa_de_este_hecho_redondeada:,.3f} UIT" # Usamos el valor redondeado para mostrar
                         })
-                    # --- FIN DEL BLOQUE A VERIFICAR ---
-                    
+
+                    # Aseguramos que el total final también se formatee correctamente
                     summary_rows.append({'numeral': 'Total', 'infraccion': '', 'multa': f"{multa_total_uit:,.3f} UIT"})
                     sub_resumen_final = create_summary_table_subdoc(doc_maestra, ["Numeral", "Infracciones", "Multa"], summary_rows, ['numeral', 'infraccion', 'multa'])
                     
