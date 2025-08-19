@@ -151,61 +151,80 @@ def create_table_subdoc(doc_template, headers, data, keys):
 
 def create_main_table_subdoc(doc_template, headers, data, keys):
     """
-    Crea una tabla para el cuerpo principal del informe con formato específico:
-    - Sombreado y negrita en primera y última fila.
-    - Alineaciones específicas por columna.
+    Crea una tabla con formato y ahora es lo suficientemente inteligente
+    para manejar tanto tablas simples como tablas con superíndices.
     """
     sub = doc_template.new_subdoc()
     table = sub.add_table(rows=1, cols=len(headers))
     table.style = 'TablaCuerpo'
-
-    # Color de fondo gris claro
     SHADING_COLOR = "D9D9D9"
 
-    # --- Formato del Encabezado ---
+    # --- Formato del Encabezado (sin cambios) ---
     hdr_cells = table.rows[0].cells
     for i, header_text in enumerate(headers):
+        # ... (tu código de formato de encabezado se mantiene igual) ...
         p = hdr_cells[i].paragraphs[0]
         run = p.add_run(header_text)
-        # Formato de fuente y negrita
         run.font.name = 'Arial'
         run.font.size = Pt(10)
         run.bold = True
-        # Alineación centrada
         p.alignment = WD_ALIGN_PARAGRAPH.CENTER
         hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
-        # Color de fondo
         set_cell_shading(hdr_cells[i], SHADING_COLOR)
 
-    # --- Formato de las Filas de Datos ---
+
+    # --- Formato de las Filas de Datos (CON LÓGICA MEJORADA) ---
     for row_idx, item in enumerate(data):
         row_cells = table.add_row().cells
-        # Determinar si es la última fila
         is_last_row = (row_idx == len(data) - 1)
 
         for col_idx, key in enumerate(keys):
-            cell_text = str(item.get(key, ''))
             p = row_cells[col_idx].paragraphs[0]
-            run = p.add_run(cell_text)
+            p.clear()
 
-            # Formato de fuente base
-            run.font.name = 'Arial'
-            run.font.size = Pt(10)
+            # --- INICIO DE LA LÓGICA MEJORADA ---
+            
+            # Comprobamos si es una fila especial con superíndice (solo para la tabla de BI)
+            if 'descripcion_superindice' in item and col_idx == 0:
+                # Si lo es, aplicamos la lógica de dos partes
+                texto_principal = item.get('descripcion_texto', '')
+                run_texto = p.add_run(texto_principal)
+                run_texto.font.name = 'Arial'
+                run_texto.font.size = Pt(10)
+                if is_last_row:
+                    run_texto.bold = True
+                
+                superindice = item.get('descripcion_superindice', '')
+                if superindice:
+                    run_super = p.add_run(superindice)
+                    run_super.font.superscript = True
+                    run_super.font.name = 'Arial'
+                    run_super.font.size = Pt(10)
+                    if is_last_row:
+                        run_super.bold = True
+            
+            # Para todas las demás tablas (como la de Multa) y las demás columnas
+            else:
+                cell_text = str(item.get(key, ''))
+                run = p.add_run(cell_text)
+                run.font.name = 'Arial'
+                run.font.size = Pt(10)
+                if is_last_row:
+                    run.bold = True
 
-            # Alineación horizontal específica por columna
-            if col_idx == 0:  # Primera columna
+            # --- FIN DE LA LÓGICA MEJORADA ---
+
+            # El resto del formato de celda se aplica a todos los casos
+            if col_idx == 0:
                 p.alignment = WD_ALIGN_PARAGRAPH.LEFT
-            else:  # Segunda columna
+            else:
                 p.alignment = WD_ALIGN_PARAGRAPH.RIGHT
-
-            # Centrado vertical para todas las celdas
+            
             row_cells[col_idx].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-            # Formato especial para la última fila
             if is_last_row:
-                run.bold = True
                 set_cell_shading(row_cells[col_idx], SHADING_COLOR)
-
+                
     return sub
 
 def create_summary_table_subdoc(doc_template, headers, data, keys):
