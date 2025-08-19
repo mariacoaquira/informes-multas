@@ -2,6 +2,7 @@ import io
 import gspread
 import streamlit as st
 import pandas as pd
+from babel.dates import format_date
 from datetime import datetime, date
 from dateutil.relativedelta import relativedelta
 from google.oauth2.service_account import Credentials
@@ -97,12 +98,12 @@ def descargar_archivo_drive(file_id): # Ya no necesita 'credentials_path'
 
 def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
     """
-    Calcula el Beneficio Ilícito para casos de cumplimiento tardío y construye
-    la tabla de resultados detallada.
+    Calcula el BI para casos tardíos y devuelve los datos con control manual
+    sobre las fuentes y superíndices.
     """
     try:
-        # 1. Desempaquetar datos
-        # ... (esta parte se mantiene igual) ...
+        # --- 1. Cálculos (esta parte se mantiene igual) ---
+        # ... (todo tu código para calcular bi_final_soles, etc. se mantiene)
         df_indices = datos_entrada['df_indices']
         df_uit = datos_entrada['df_uit']
         fecha_incumplimiento_calc = datos_entrada['fecha_incumplimiento']
@@ -115,16 +116,13 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
         fuente_cos = datos_entrada.get('fuente_cos', '')
         ce = ce_soles if moneda_cos == 'S/' else ce_dolares
         fecha_hoy = date.today()
-
-        # 2. Cálculos numéricos
-        # ... (toda tu lógica de cálculo para t_cap, bi_cap_soles, ajuste_inflacionario, etc. se mantiene igual) ...
         diff_cap = relativedelta(fecha_cumplimiento_extemporaneo, fecha_incumplimiento_calc)
         t_cap = (diff_cap.years * 12 + diff_cap.months) + (diff_cap.days / 30.0)
         ce_ajustado_cap = ce * ((1 + cos_mensual) ** t_cap)
         end_date_tc = pd.to_datetime(fecha_cumplimiento_extemporaneo)
         start_date_tc = end_date_tc - relativedelta(months=12)
         tc_promedio_df = df_indices[(df_indices['Indice_Mes'] > start_date_tc) & (df_indices['Indice_Mes'] <= end_date_tc)]
-        tc_promedio_12m = tc_promedio_df['TC_Mensual'].mean()
+        tc_promedio_12m = tc_promedio_df['TC_Mensual'].mean() if not tc_promedio_df.empty else 0
         bi_cap_soles = ce_ajustado_cap if moneda_cos == 'S/' else ce_ajustado_cap * tc_promedio_12m
         df_indices_sorted = df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False)
         ipc_hoy = 0
@@ -144,48 +142,58 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
         valor_uit = float(valor_uit_row.iloc[0]['Valor_UIT']) if not valor_uit_row.empty else 0
         beneficio_ilicito_uit = bi_final_soles / valor_uit if valor_uit > 0 else 0
 
-        # ---- INICIO DE LA SECCIÓN MODIFICADA ----
-        
-        # 5. Definir las filas de la tabla con sus claves de referencia para las fuentes
+
+        # --- INICIO DE LA SECCIÓN DE CONTROL MANUAL ---
+
+        # 2. Define qué letra quieres en cada fila.
         tabla_resumen_filas = [
-            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "ce_anexo"},
-            {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "cok"},
-            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": "cok"},
-            {"descripcion": f"T: Meses hasta cumplimiento extemporáneo ({fecha_cumplimiento_extemporaneo.strftime('%d/%m/%Y')})", "monto": f"{t_cap:,.3f}", "ref": "periodo_bi_ext"},
+            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
+            {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "b"},
+            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None},
+            {"descripcion": f"T: Meses hasta cumplimiento extemporáneo", "monto": f"{t_cap:,.3f}", "ref": "c"},
             {"descripcion": "Costo evitado ajustado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado_cap:,.3f}", "ref": None},
-            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "bcrp"},
-            {"descripcion": f"Beneficio ilícito al {fecha_cumplimiento_extemporaneo.strftime('%d/%m/%Y')}", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
-            {"descripcion": "Ajuste inflacionario", "monto": f"{ajuste_inflacionario:,.3f}", "ref": "ipc_fecha"},
+            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
+            {"descripcion": f"Beneficio ilícito a la fecha de cumplimiento extemporáneo", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
+            {"descripcion": "Ajuste inflacionario", "monto": f"{ajuste_inflacionario:,.3f}", "ref": "e"},
             {"descripcion": "Beneficio ilícito a la fecha de emisión del informe", "monto": f"S/ {bi_final_soles:,.3f}", "ref": None},
             {"descripcion": f"UIT al año {fecha_hoy.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
             {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
         ]
 
-        # 6. Recolectar todos los datos necesarios para formatear las plantillas de fuentes
+        # 3. Crea el mapa que conecta cada letra con el texto de la fuente. (ESTA ES LA PARTE QUE FALTABA)
+        footnote_mapping = {
+            'a': 'ce_anexo',
+            'b': 'cok',
+            'c': 'periodo_bi_ext',
+            'd': 'bcrp',
+            'e': 'ipc_fecha'
+        }
+
+        # 4. Recolecta los datos necesarios para formatear las plantillas.
         datos_para_fuentes = {
             'rubro': datos_entrada.get('rubro', ''),
             'fuente_cos': fuente_cos,
-            # Formateamos las fechas a texto con el nombre de tu placeholder
-            'fecha_incumplimiento_texto': fecha_incumplimiento_calc.strftime('%d de %B de %Y'),
-            'fecha_extemporanea_texto': fecha_cumplimiento_extemporaneo.strftime('%d de %B de %Y'),
-            'mes_actual_texto': fecha_hoy.strftime('%B de %Y'),
-            'ultima_fecha_ipc_texto': df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False).iloc[0]['Indice_Mes'].strftime('%B %Y')
+            # --- LÍNEAS MODIFICADAS ---
+            'fecha_incumplimiento_texto': format_date(fecha_incumplimiento_calc, "d 'de' MMMM 'de' yyyy", locale='es'),
+            'fecha_extemporanea_texto': format_date(fecha_cumplimiento_extemporaneo, "d 'de' MMMM 'de' yyyy", locale='es'),
+            'mes_actual_texto': format_date(fecha_hoy, "MMMM 'de' yyyy", locale='es'),
+            'ultima_fecha_ipc_texto': format_date(df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False).iloc[0]['Indice_Mes'], 'MMMM yyyy', locale='es'),
+            'fecha_hoy_texto': format_date(fecha_hoy, "d 'de' MMMM 'de' yyyy", locale='es'),
         }
 
-        # 7. Devolver la nueva estructura de datos
+        # 5. Devolver la estructura de datos completa y estandarizada.
         return {
             "table_rows": tabla_resumen_filas,
+            "footnote_mapping": footnote_mapping,
             "footnote_data": datos_para_fuentes,
-            "beneficio_ilicito_uit": beneficio_ilicito_uit, # Mantenemos este valor clave
+            "beneficio_ilicito_uit": beneficio_ilicito_uit,
             "error": None
         }
-        # ---- FIN DE LA SECCIÓN MODIFICADA ----
 
     except Exception as e:
         import traceback
         traceback.print_exc()
         return {'error': f"Error en cálculo de BI extemporáneo: {e}"}
-    
 
 def calcular_beneficio_ilicito(datos_entrada):
     """
@@ -230,31 +238,40 @@ def calcular_beneficio_ilicito(datos_entrada):
 
         # --- INICIO DE LA NUEVA SECCIÓN ---
 
-        # 2. Definir las filas de la tabla con sus claves de referencia
+        # 2. Define qué letra quieres en cada fila. Si no quieres letra, pon None.
         tabla_resumen_filas = [
-            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "ce_anexo"},
-            {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "cok"},
-            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": "cok"},
-            {"descripcion": "T: meses transcurridos", "monto": f"{t_meses_decimal:,.3f}", "ref": "periodo_bi"},
+            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
+            {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "b"},
+            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None}, # <-- SIN LETRA
+            {"descripcion": "T: meses transcurridos", "monto": f"{t_meses_decimal:,.3f}", "ref": "c"},
             {"descripcion": "Costo evitado ajustado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado:,.3f}", "ref": None},
-            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "bcrp"},
+            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
             {"descripcion": "Beneficio ilícito (S/)", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None},
             {"descripcion": f"UIT al año {fecha_calculo.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
             {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
         ]
 
+        # 3. Crea un mapa que le dice al sistema qué texto corresponde a cada letra
+        footnote_mapping = {
+            'a': 'ce_anexo',
+            'b': 'cok',
+            'c': 'periodo_bi',
+            'd': 'bcrp'
+        }
+
         # 3. Recolectar datos para formatear las fuentes
         datos_para_fuentes = {
             'rubro': rubro,
             'fuente_cos': fuente_cos,
-            # Formateamos las fechas a texto con el nombre de tu placeholder
-            'fecha_incumplimiento_texto': fecha_incumplimiento_calc.strftime('%d de %B de %Y'),
-            'fecha_hoy_texto': fecha_calculo.strftime('%d de %B de %Y'),
+            # --- LÍNEAS MODIFICADAS ---
+            'fecha_incumplimiento_texto': format_date(fecha_incumplimiento_calc, "d 'de' MMMM 'de' yyyy", locale='es'),
+            'fecha_hoy_texto': format_date(fecha_calculo, "d 'de' MMMM 'de' yyyy", locale='es'),
         }
 
         # 4. Devolver la nueva estructura de datos
         return {
             "table_rows": tabla_resumen_filas,
+            "footnote_mapping": footnote_mapping,
             "footnote_data": datos_para_fuentes,
             "beneficio_ilicito_uit": beneficio_ilicito_uit,
             "fuente_cos": fuente_cos, # Mantenemos estos para compatibilidad si es necesario
