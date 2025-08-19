@@ -20,6 +20,8 @@ NOMBRE_GSHEET_ASIGNACIONES = "Base de asignaciones de multas"
 #  FUNCIONES DE DATOS
 # --------------------------------------------------------------------
 
+# sheets.py
+
 import streamlit as st
 
 @st.cache_resource(show_spinner="Conectando a Google Sheets...")
@@ -88,258 +90,184 @@ def descargar_archivo_drive(file_id): # Ya no necesita 'credentials_path'
     except Exception as e:
         st.error(f"Error al descargar el archivo '{file_id}' de Drive: {e}")
         return None
-
+    
 # --------------------------------------------------------------------
 #  FUNCIONES DE CÁLCULO
 # --------------------------------------------------------------------
 
-def calcular_costo_evitado(datos_entrada):
+def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
     """
-    Realiza el cálculo del Costo Evitado.
-    Versión final, corregida y con todos los placeholders.
-    [cite_start]"""
+    Calcula el Beneficio Ilícito para casos de cumplimiento tardío y construye
+    la tabla de resultados detallada.
+    """
     try:
-        # --- 1. Desempaquetar datos ---
-        df_items_infracciones = datos_entrada['df_items_infracciones']
-        df_costos_items = datos_entrada['df_costos_items']
-        df_coti_general = datos_entrada['df_coti_general']
-        df_salarios_general = datos_entrada['df_salarios_general']
+        # 1. Desempaquetar datos
+        # ... (esta parte se mantiene igual) ...
         df_indices = datos_entrada['df_indices']
-        id_infraccion = datos_entrada['id_infraccion']
-        fecha_incumplimiento = datos_entrada['fecha_incumplimiento']
-        id_rubro = datos_entrada['id_rubro']
-        dias_habiles = datos_entrada.get('dias_habiles', 0)
-        num_personal_capacitacion = datos_entrada.get('num_personal_capacitacion', 0)
+        df_uit = datos_entrada['df_uit']
+        fecha_incumplimiento_calc = datos_entrada['fecha_incumplimiento']
+        fecha_cumplimiento_extemporaneo = datos_entrada['fecha_cumplimiento_extemporaneo']
+        ce_soles = datos_entrada['ce_soles']
+        ce_dolares = datos_entrada['ce_dolares']
+        cos_anual = datos_entrada.get('cos_anual', 0)
+        cos_mensual = datos_entrada.get('cos_mensual', 0)
+        moneda_cos = datos_entrada.get('moneda_cos', 'S/')
+        fuente_cos = datos_entrada.get('fuente_cos', '')
+        ce = ce_soles if moneda_cos == 'S/' else ce_dolares
+        fecha_hoy = date.today()
 
-        # --- 2. Preparación de DataFrames y datos base ---
-        df_indices['Indice_Mes'] = pd.to_datetime(df_indices['Indice_Mes'], dayfirst=True, errors='coerce')
-        df_indices.dropna(subset=['Indice_Mes'], inplace=True)
-        df_coti_general['Fecha_Costeo'] = pd.to_datetime(df_coti_general['Fecha_Costeo'], dayfirst=True, errors='coerce')
-        df_coti_general.dropna(subset=['Fecha_Costeo'], inplace=True)
+        # 2. Cálculos numéricos
+        # ... (toda tu lógica de cálculo para t_cap, bi_cap_soles, ajuste_inflacionario, etc. se mantiene igual) ...
+        diff_cap = relativedelta(fecha_cumplimiento_extemporaneo, fecha_incumplimiento_calc)
+        t_cap = (diff_cap.years * 12 + diff_cap.months) + (diff_cap.days / 30.0)
+        ce_ajustado_cap = ce * ((1 + cos_mensual) ** t_cap)
+        end_date_tc = pd.to_datetime(fecha_cumplimiento_extemporaneo)
+        start_date_tc = end_date_tc - relativedelta(months=12)
+        tc_promedio_df = df_indices[(df_indices['Indice_Mes'] > start_date_tc) & (df_indices['Indice_Mes'] <= end_date_tc)]
+        tc_promedio_12m = tc_promedio_df['TC_Mensual'].mean()
+        bi_cap_soles = ce_ajustado_cap if moneda_cos == 'S/' else ce_ajustado_cap * tc_promedio_12m
+        df_indices_sorted = df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False)
+        ipc_hoy = 0
+        if not df_indices_sorted.empty:
+            valor_ipc_hoy = df_indices_sorted.iloc[0]['IPC_Mensual']
+            if valor_ipc_hoy is not None:
+                ipc_hoy = float(valor_ipc_hoy)
+        ipc_ext_row = df_indices[df_indices['Indice_Mes'].dt.to_period('M') == pd.to_datetime(fecha_cumplimiento_extemporaneo).to_period('M')]
+        ipc_ext = 0
+        if not ipc_ext_row.empty:
+            valor_ipc_ext = ipc_ext_row.iloc[0]['IPC_Mensual']
+            if valor_ipc_ext is not None:
+                ipc_ext = float(valor_ipc_ext)
+        ajuste_inflacionario = ipc_hoy / ipc_ext if ipc_ext > 0 else 1
+        bi_final_soles = bi_cap_soles * ajuste_inflacionario
+        valor_uit_row = df_uit[df_uit['Año_UIT'] == fecha_hoy.year]
+        valor_uit = float(valor_uit_row.iloc[0]['Valor_UIT']) if not valor_uit_row.empty else 0
+        beneficio_ilicito_uit = bi_final_soles / valor_uit if valor_uit > 0 else 0
+
+        # ---- INICIO DE LA SECCIÓN MODIFICADA ----
         
-        fecha_incumplimiento_dt = pd.to_datetime(fecha_incumplimiento)
-        ipc_incumplimiento_row = df_indices[df_indices['Indice_Mes'].dt.to_period('M') == fecha_incumplimiento_dt.to_period('M')]
-        ipc_incumplimiento = ipc_incumplimiento_row.iloc[0]['IPC_Mensual']
-        tipo_cambio_incumplimiento = ipc_incumplimiento_row.iloc[0]['TC_Mensual']
+        # 5. Definir las filas de la tabla con sus claves de referencia para las fuentes
+        tabla_resumen_filas = [
+            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "ce_anexo"},
+            {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "cok"},
+            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": "cok"},
+            {"descripcion": f"T: Meses hasta cumplimiento extemporáneo ({fecha_cumplimiento_extemporaneo.strftime('%d/%m/%Y')})", "monto": f"{t_cap:,.3f}", "ref": "periodo_bi_ext"},
+            {"descripcion": "Costo evitado ajustado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado_cap:,.3f}", "ref": None},
+            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "bcrp"},
+            {"descripcion": f"Beneficio ilícito al {fecha_cumplimiento_extemporaneo.strftime('%d/%m/%Y')}", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
+            {"descripcion": "Ajuste inflacionario", "monto": f"{ajuste_inflacionario:,.3f}", "ref": "ipc_fecha"},
+            {"descripcion": "Beneficio ilícito a la fecha de emisión del informe", "monto": f"S/ {bi_final_soles:,.3f}", "ref": None},
+            {"descripcion": f"UIT al año {fecha_hoy.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
+            {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
+        ]
 
-        # --- 3. Inicialización de variables para placeholders ---
-        sustentos_de_cotizaciones = []
-        fuente_salario_final, pdf_salario_final, incluye_igv_final = '', '', ''
-        salario_info_capturado, igv_info_capturado = False, False
-        lineas_resumen_fuentes = []
-        sustentos, ids_anexos, tabla_final_ce = [], [], []
-        
-        # --- 4. Bucle principal de cálculo ---
-        receta_df = df_items_infracciones[df_items_infracciones['ID_Infraccion'] == id_infraccion]
-        for _, item_receta in receta_df.iterrows():
-            
-            # --- Lógica de selección de ítem ---
-            posibles_costos = pd.DataFrame()
-            if id_infraccion == 'INF003':
-                if num_personal_capacitacion == 1: codigo_item = 'ITEM0110'
-                elif 2 <= num_personal_capacitacion <= 5: codigo_item = 'ITEM0111'
-                elif 6 <= num_personal_capacitacion <= 10: codigo_item = 'ITEM0112'
-                else: codigo_item = 'ITEM0113'
-                posibles_costos = df_costos_items[df_costos_items['ID_Item'] == codigo_item].copy()
-            else:
-                id_item_infraccion_actual = item_receta['ID_Item_Infraccion']
-                posibles_costos = df_costos_items[df_costos_items['ID_Item_Infraccion'] == id_item_infraccion_actual].copy()
-            
-            if posibles_costos.empty: continue
-
-            tipo_item_receta = item_receta.get('Tipo_Item')
-            df_candidatos = pd.DataFrame()
-            if tipo_item_receta == 'Variable':
-                df_candidatos = posibles_costos[posibles_costos['ID_Rubro'] == id_rubro].copy()
-            elif tipo_item_receta == 'Fijo':
-                df_candidatos = posibles_costos.copy()
-            
-            if df_candidatos.empty: continue
-
-            fechas_fuente = []
-            for _, candidato in df_candidatos.iterrows():
-                id_general = candidato['ID_General']
-                fecha_fuente = pd.NaT
-                if pd.notna(id_general):
-                    if 'SAL' in id_general:
-                        fuente_salario = df_salarios_general[df_salarios_general['ID_Salario'] == id_general]
-                        if not fuente_salario.empty:
-                            anio = fuente_salario.iloc[0]['Costeo_Salario']
-                            fecha_fuente = pd.to_datetime(f'{int(anio)}-06-30')
-                    elif 'COT' in id_general:
-                        fuente_cotizacion = df_coti_general[df_coti_general['ID_Cotizacion'] == id_general]
-                        if not fuente_cotizacion.empty:
-                            fecha_fuente = fuente_cotizacion.iloc[0]['Fecha_Costeo']
-                fechas_fuente.append(fecha_fuente)
-            
-            df_candidatos['Fecha_Fuente'] = fechas_fuente
-            df_candidatos.dropna(subset=['Fecha_Fuente'], inplace=True)
-            if df_candidatos.empty: continue
-
-            df_candidatos['Diferencia_Dias'] = (df_candidatos['Fecha_Fuente'] - fecha_incumplimiento_dt).dt.days.abs()
-            fila_costo_final = df_candidatos.loc[df_candidatos['Diferencia_Dias'].idxmin()]
-
-            if fila_costo_final is not None:
-                # --- INICIO DE LA CORRECCIÓN ---
-                # Recolectar sustentos y anexos para este ítem
-                if pd.notna(fila_costo_final.get('Sustento_Item')):
-                    sustentos.append(fila_costo_final['Sustento_Item'])
-                if pd.notna(fila_costo_final.get('ID_Anexo_Drive')):
-                    ids_anexos.append(fila_costo_final['ID_Anexo_Drive'])
-                # --- FIN DE LA CORRECCIÓN ---
-                # --- CAPTURA DE DATOS PARA PLACEHOLDERS ---
-                id_general = fila_costo_final.get('ID_General')
-                if id_general:
-                    if 'COT' in id_general:
-                        fuente_row = df_coti_general[df_coti_general['ID_Cotizacion'] == id_general]
-                        if not fuente_row.empty:
-                            sustento = fuente_row.iloc[0].get('Sustento_Cotizacion')
-                            if sustento: sustentos_de_cotizaciones.append(sustento)
-                            if not igv_info_capturado:
-                                estado_igv = fuente_row.iloc[0].get('Incluye_IGV', '')
-                                if estado_igv == 'SI': incluye_igv_final = "Precio incluye IGV"
-                                elif estado_igv == 'NO': incluye_igv_final = "Precio no incluye IGV"
-                                igv_info_capturado = True
-                    elif 'SAL' in id_general and not salario_info_capturado:
-                        fuente_row = df_salarios_general[df_salarios_general['ID_Salario'] == id_general]
-                        if not fuente_row.empty:
-                            fuente_salario_final = fuente_row.iloc[0].get('Fuente_Salario', '')
-                            pdf_salario_final = fuente_row.iloc[0].get('PDF_Salario', '')
-                            salario_info_capturado = True
-
-                # --- CONSTRUCCIÓN DEL RESUMEN DE FUENTES ---
-                descripcion_item = fila_costo_final.get('Descripcion_Item', 'Ítem no especificado')
-                fecha_fuente_dt = fila_costo_final.get('Fecha_Fuente')
-                ipc_costeo_row = df_indices[df_indices['Indice_Mes'].dt.to_period('M') == fecha_fuente_dt.to_period('M')]
-                ipc_costeo_valor = ipc_costeo_row.iloc[0]['IPC_Mensual'] if not ipc_costeo_row.empty else 0
-                fc_texto = f"promedio ({fecha_fuente_dt.year})" if (id_general and 'SAL' in id_general) else fecha_fuente_dt.strftime('%B %Y').lower()
-                ipc_fc_texto = f"{ipc_costeo_valor:,.3f}"
-                linea_resumen = f"{descripcion_item}: {fc_texto}, IPC={ipc_fc_texto}"
-                lineas_resumen_fuentes.append(linea_resumen)
-
-                # --- CÁLCULO DE COSTOS DEL ÍTEM (CORREGIDO) ---
-                costo_original = float(fila_costo_final['Costo_Unitario_Item'])
-                moneda_original = fila_costo_final['Moneda_Item']
-                
-                tc_en_fecha_costeo = 0
-                tc_costeo_row = df_indices[df_indices['Indice_Mes'].dt.to_period('M') == fecha_fuente_dt.to_period('M')]
-                if not tc_costeo_row.empty:
-                    tc_en_fecha_costeo = tc_costeo_row.iloc[0]['TC_Mensual']
-                
-                precio_base_soles, precio_base_dolares = 0, 0
-                if moneda_original == 'US$':
-                    precio_base_dolares = costo_original
-                    if tc_en_fecha_costeo > 0:
-                        precio_base_soles = costo_original * tc_en_fecha_costeo
-                else:
-                    precio_base_soles = costo_original
-                    if tc_en_fecha_costeo > 0:
-                        precio_base_dolares = costo_original / tc_en_fecha_costeo
-                
-                ipc_costeo = ipc_costeo_valor
-                if costo_original > 0 and ipc_costeo > 0:
-                    precio_base_soles_con_igv = precio_base_soles * 1.18 if fila_costo_final['Incluye_IGV'] == 'NO' else precio_base_soles
-                    factor_ajuste = round(ipc_incumplimiento / ipc_costeo, 3)
-                    cantidad = float(item_receta.get('Cantidad_Recursos') or 1)
-                    horas = (dias_habiles or 0) * 8 if id_infraccion == 'INF004' else float(item_receta.get('Cantidad_Horas') or 1)
-                    monto_soles = cantidad * horas * precio_base_soles_con_igv * factor_ajuste
-                    monto_dolares = monto_soles / tipo_cambio_incumplimiento
-                    
-                    tabla_final_ce.append({
-                        "descripcion": descripcion_item,
-                        "precio_soles": precio_base_soles,
-                        "precio_dolares": precio_base_dolares,
-                        "factor_ajuste": factor_ajuste,
-                        "monto_soles": monto_soles,
-                        "monto_dolares": monto_dolares,
-                        "costo_original": costo_original,
-                        "moneda_original": moneda_original,
-                        "cantidad": cantidad,
-                        "horas": horas,          
-                    })
-        
-        # --- 5. Ensamblaje y retorno de resultados ---
-        if not tabla_final_ce:
-            return {'error': "No se pudieron encontrar costos aplicables para los ítems de la infracción con los criterios dados."}
-
-        df_presentacion = pd.DataFrame(tabla_final_ce)
-        fuente_coti_texto = "\n".join([f"- {s}" for s in list(dict.fromkeys(sustentos_de_cotizaciones))])
-        resumen_final_texto = "\n".join(lineas_resumen_fuentes)
-        fi_mes_texto = fecha_incumplimiento_dt.strftime('%B %Y').lower()
-
-        return {
-            "ce_data_raw": df_presentacion.to_dict('records'),
-            "total_soles": df_presentacion['monto_soles'].sum(),
-            "total_dolares": df_presentacion['monto_dolares'].sum(),
-            "sustentos": list(set(sustentos)),
-            "ids_anexos": list(set(ids_anexos)),
-            "error": None,
-            "fuente_coti": fuente_coti_texto,
-            "fuente_salario": fuente_salario_final,
-            "pdf_salario": pdf_salario_final,
-            "fi_mes": fi_mes_texto,
-            "fi_ipc": f"{ipc_incumplimiento:,.3f}",
-            "fi_tc": f"{tipo_cambio_incumplimiento:,.3f}",
-            "resumen_fuentes_costo": resumen_final_texto,
-            "incluye_igv": incluye_igv_final
+        # 6. Recolectar todos los datos necesarios para formatear las plantillas de fuentes
+        datos_para_fuentes = {
+            'rubro': datos_entrada.get('rubro', ''),
+            'fuente_cos': fuente_cos,
+            # Formateamos las fechas a texto con el nombre de tu placeholder
+            'fecha_incumplimiento_texto': fecha_incumplimiento_calc.strftime('%d de %B de %Y'),
+            'fecha_extemporanea_texto': fecha_cumplimiento_extemporaneo.strftime('%d de %B de %Y'),
+            'mes_actual_texto': fecha_hoy.strftime('%B de %Y'),
+            'ultima_fecha_ipc_texto': df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False).iloc[0]['Indice_Mes'].strftime('%B %Y')
         }
+
+        # 7. Devolver la nueva estructura de datos
+        return {
+            "table_rows": tabla_resumen_filas,
+            "footnote_data": datos_para_fuentes,
+            "beneficio_ilicito_uit": beneficio_ilicito_uit, # Mantenemos este valor clave
+            "error": None
+        }
+        # ---- FIN DE LA SECCIÓN MODIFICADA ----
+
     except Exception as e:
         import traceback
-        print(traceback.format_exc())
-        return {'error': f"Error crítico en el cálculo del CE: {e}"}
+        traceback.print_exc()
+        return {'error': f"Error en cálculo de BI extemporáneo: {e}"}
+    
 
 def calcular_beneficio_ilicito(datos_entrada):
     """
-    Realiza el cálculo completo del Beneficio Ilícito (BI).
-    Recibe un diccionario con los DataFrames y datos necesarios.
-    Devuelve un diccionario con los resultados.
+    Realiza el cálculo del BI y devuelve los datos en el nuevo formato estándar
+    con claves para fuentes dinámicas.
     """
     try:
+        # 1. Desempaquetado y cálculos (la mayoría de esto ya lo tenías)
         df_cos = datos_entrada['df_cos']
         df_uit = datos_entrada['df_uit']
-        df_indices_bi = datos_entrada['df_indices_bi']
+        df_indices = datos_entrada['df_indices']
         rubro = datos_entrada['rubro']
         ce_soles = datos_entrada['ce_soles']
         ce_dolares = datos_entrada['ce_dolares']
         fecha_incumplimiento_calc = datos_entrada['fecha_incumplimiento']
+        fecha_calculo = date.today()
+
         cos_info = df_cos[df_cos['Sector_Rubro'] == rubro]
         if cos_info.empty:
             return {'error': f"No se encontró información de COS para el rubro '{rubro}'."}
+        
         fuente_cos = cos_info.iloc[0]['Fuente_COS']
         moneda_cos = str(cos_info.iloc[0]['Moneda_COS']).strip()
         cos_anual = convertir_porcentaje(cos_info.iloc[0]['COS_Anual'])
         cos_mensual = convertir_porcentaje(cos_info.iloc[0]['COS_Mensual'])
         ce = ce_soles if moneda_cos == 'S/' else ce_dolares
-        fecha_calculo = date.today()
+        
         diff = relativedelta(fecha_calculo, fecha_incumplimiento_calc)
-        meses_completos = diff.years * 12 + diff.months
-        dias_sobrantes = diff.days
-        t_meses_decimal = meses_completos + (dias_sobrantes / 30.0)
+        t_meses_decimal = (diff.years * 12 + diff.months) + (diff.days / 30.0)
         ce_ajustado = ce * ((1 + cos_mensual) ** t_meses_decimal)
-        df_indices_bi['Indice_Mes'] = pd.to_datetime(df_indices_bi['Indice_Mes'], dayfirst=True, errors='coerce')
-        df_indices_bi.dropna(subset=['Indice_Mes'], inplace=True)
-        df_indices_bi['TC_Mensual'] = pd.to_numeric(df_indices_bi['TC_Mensual'], errors='coerce')
+        
         end_date_tc = pd.to_datetime(fecha_calculo)
         start_date_tc = end_date_tc - relativedelta(months=12)
-        tc_promedio_df = df_indices_bi[(df_indices_bi['Indice_Mes'] > start_date_tc) & (df_indices_bi['Indice_Mes'] <= end_date_tc)]
-        tc_promedio_12m = tc_promedio_df['TC_Mensual'].mean()
+        tc_promedio_df = df_indices[(df_indices['Indice_Mes'] > start_date_tc) & (df_indices['Indice_Mes'] <= end_date_tc)]
+        tc_promedio_12m = tc_promedio_df['TC_Mensual'].mean() if not tc_promedio_df.empty else 0
+        
         beneficio_ilicito_soles = ce_ajustado if moneda_cos == 'S/' else ce_ajustado * tc_promedio_12m
-        ano_actual = fecha_calculo.year
-        uit_info = df_uit[df_uit['Año_UIT'] == ano_actual]
+        
+        uit_info = df_uit[df_uit['Año_UIT'] == fecha_calculo.year]
         valor_uit = float(uit_info.iloc[0]['Valor_UIT']) if not uit_info.empty else 0
         beneficio_ilicito_uit = beneficio_ilicito_soles / valor_uit if valor_uit > 0 else 0
-        tabla_resumen_data = {
-            "Descripción": ["CE para el hecho imputado", "COS (anual)", "COSm (mensual)", "T: meses transcurridos", "Costo evitado ajustado", "Tipo de cambio promedio", "Beneficio ilícito (S/)", f"UIT al año {ano_actual}", "Beneficio Ilícito (UIT)"],
-            "Monto": [f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", f"{cos_anual:,.3%}", f"{cos_mensual:,.3%}", f"{t_meses_decimal:,.3f}", f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado:,.3f}", f"{tc_promedio_12m:,.3f}", f"S/ {beneficio_ilicito_soles:,.3f}", f"S/ {valor_uit:,.2f}", f"{beneficio_ilicito_uit:,.3f}"]
+
+        # --- INICIO DE LA NUEVA SECCIÓN ---
+
+        # 2. Definir las filas de la tabla con sus claves de referencia
+        tabla_resumen_filas = [
+            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "ce_anexo"},
+            {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "cok"},
+            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": "cok"},
+            {"descripcion": "T: meses transcurridos", "monto": f"{t_meses_decimal:,.3f}", "ref": "periodo_bi"},
+            {"descripcion": "Costo evitado ajustado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado:,.3f}", "ref": None},
+            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "bcrp"},
+            {"descripcion": "Beneficio ilícito (S/)", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None},
+            {"descripcion": f"UIT al año {fecha_calculo.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
+            {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
+        ]
+
+        # 3. Recolectar datos para formatear las fuentes
+        datos_para_fuentes = {
+            'rubro': rubro,
+            'fuente_cos': fuente_cos,
+            # Formateamos las fechas a texto con el nombre de tu placeholder
+            'fecha_incumplimiento_texto': fecha_incumplimiento_calc.strftime('%d de %B de %Y'),
+            'fecha_hoy_texto': fecha_calculo.strftime('%d de %B de %Y'),
         }
-        df_resumen = pd.DataFrame(tabla_resumen_data)
+
+        # 4. Devolver la nueva estructura de datos
         return {
+            "table_rows": tabla_resumen_filas,
+            "footnote_data": datos_para_fuentes,
             "beneficio_ilicito_uit": beneficio_ilicito_uit,
-            "bi_data_raw": df_resumen.to_dict('records'),
-            "fuente_cos": fuente_cos,
+            "fuente_cos": fuente_cos, # Mantenemos estos para compatibilidad si es necesario
+            "cos_anual": cos_anual,
+            "cos_mensual": cos_mensual,
+            "moneda_cos": moneda_cos,
             "error": None
         }
+        # --- FIN DE LA NUEVA SECCIÓN ---
+
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         return {'error': f"Error en el cálculo del BI: {e}"}
 
 def calcular_multa(datos_entrada):
@@ -389,5 +317,3 @@ def get_person_details_by_base_name(nombre_base, df_analistas_func):
             }
             return {k: (v if v is not None else '') for k, v in details.items()}
     return {'titulo': '', 'nombre': '', 'cargo': '', 'colegiatura': ''}
-
-
