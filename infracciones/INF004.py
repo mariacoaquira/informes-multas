@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 import io
+from babel.dates import format_date
 from num2words import num2words
 from docxtpl import DocxTemplate, RichText
 from datetime import date, timedelta
@@ -181,9 +182,9 @@ def renderizar_inputs_especificos(i):
 
     col_req1, col_req2 = st.columns(2)
     with col_req1:
-        fecha_solicitud = st.date_input("Fecha de solicitud", key=f"fecha_sol_{i}", format="DD/MM/YYYY")
+        fecha_solicitud = st.date_input("Fecha de solicitud", key=f"fecha_sol_{i}", format="DD/MM/YYYY", value=None)
         min_fecha_entrega = fecha_solicitud if fecha_solicitud else date.today()
-        fecha_entrega = st.date_input("Fecha máxima de entrega", min_value=min_fecha_entrega, key=f"fecha_ent_{i}", format="DD/MM/YYYY")
+        fecha_entrega = st.date_input("Fecha máxima de entrega", min_value=min_fecha_entrega, key=f"fecha_ent_{i}", format="DD/MM/YYYY", value=None)
 
         if fecha_solicitud and fecha_entrega:
             if fecha_entrega < fecha_solicitud:
@@ -216,6 +217,10 @@ def renderizar_inputs_especificos(i):
         )
         datos_especificos['estado_entrega'] = estado_remision
 
+        opciones_deshabilitadas = ["Remitió parcial", "Remitió parcial pero tardío"]
+        if estado_remision in opciones_deshabilitadas:
+            st.warning("Esta opción no está habilitada para la prueba piloto. Por favor, selecciona otra.")
+
         # --- INICIO DE LA CORRECCIÓN ---
         # El input para la fecha extemporánea AHORA ESTÁ DENTRO de la columna
         if estado_remision == "Remitió completo pero tardío":
@@ -223,12 +228,9 @@ def renderizar_inputs_especificos(i):
                 "Fecha de cumplimiento extemporáneo",
                 min_value=fecha_entrega,
                 key=f"fecha_ext_{i}",
-                format="DD/MM/YYYY"
+                format="DD/MM/YYYY",value=None
             )
             datos_especificos['fecha_cumplimiento_extemporaneo'] = fecha_extemporanea
-                        # --- DEBUG 1: VERIFICA EL DATO AQUÍ ---
-            st.warning(f"DEBUG UI: Fecha extemporánea capturada: {fecha_extemporanea}")
-        # --- FIN DE LA CORRECCIÓN ---
     
         # --- INICIO DE LA MODIFICACIÓN ---
     # Añadimos el cargador de archivos aquí
@@ -261,7 +263,13 @@ def validar_inputs(datos_especificos):
         return False
 
     # 3. Validar que se haya seleccionado una opción en el estado de remisión
-    if not datos_especificos.get('estado_entrega'):
+    estado = datos_especificos.get('estado_entrega')
+    if not estado:
+        return False
+    
+    # Si el estado es uno de los no permitidos, la validación falla
+    opciones_deshabilitadas = ["Remitió parcial", "Remitió parcial pero tardío"]
+    if estado in opciones_deshabilitadas:
         return False
 
     # 4. Validación condicional: si es tardío, debe tener la fecha extemporánea
@@ -334,7 +342,8 @@ def procesar_infraccion(datos_comunes, datos_especificos):
     horas_texto = num2words(horas_numero, lang='es')
     
     fecha_inc_dt = datos_especificos['fecha_incumplimiento']
-    fi_mes = fecha_inc_dt.strftime('%B de %Y').lower()
+    fi_mes = format_date(fecha_inc_dt, 'MMMM \'de\' yyyy', locale='es').lower()
+    fecha_incumplimiento_formateada = format_date(fecha_inc_dt, 'd \'de\' MMMM \'de\' yyyy', locale='es').lower()
     ipc_row_inc = datos_comunes['df_indices'][datos_comunes['df_indices']['Indice_Mes'].dt.to_period('M') == pd.to_datetime(fecha_inc_dt).to_period('M')]
     fi_ipc = f"{ipc_row_inc.iloc[0]['IPC_Mensual']:,.3f}" if not ipc_row_inc.empty else "N/A"
     fi_tc = f"{ipc_row_inc.iloc[0]['TC_Mensual']:,.3f}" if not ipc_row_inc.empty else "N/A"
@@ -376,46 +385,33 @@ def procesar_infraccion(datos_comunes, datos_especificos):
             ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
         )
     
-    # 1. Obtenemos los datos crudos y para formatear las fuentes
     filas_bi_crudas = res_bi.get('table_rows', [])
+    footnote_mapping = res_bi.get('footnote_mapping', {})
     datos_para_fuentes = res_bi.get('footnote_data', {})
 
-    # 2. Asignamos letras a las fuentes (esto se mantiene igual)
-    refs_usadas = [fila['ref'] for fila in filas_bi_crudas if fila.get('ref') and fila['ref'] not in locals().get('refs_usadas', [])]
-    letras = 'abcdefghijklmnopqrstuvwxyz'
-    mapa_ref_letra = {ref: letras[i] for i, ref in enumerate(refs_usadas)}
-
-    # 3. Construimos las fuentes (esto se mantiene igual, pero SIN RichText)
-    footnotes_bi_formateadas = []
-    for ref_key in refs_usadas:
+    footnotes_list = []
+    # Usamos sorted() para asegurar que las fuentes salgan en orden alfabético (a, b, c...)
+    for letra, ref_key in sorted(footnote_mapping.items()):
         texto_formateado = obtener_fuente_formateada(ref_key, datos_para_fuentes)
-        # Creamos un texto simple, el formato se dará en la plantilla si es necesario
-        footnotes_bi_formateadas.append(f"({mapa_ref_letra[ref_key]}) {texto_formateado}")
-    
-    # 4. Preparamos las filas de la tabla con el texto y el superíndice SEPARADOS
+        footnotes_list.append(f"({letra}) {texto_formateado}")
+
     filas_bi_para_tabla = []
     for fila_data in filas_bi_crudas:
-        ref_key = fila_data.get('ref')
-        letra = mapa_ref_letra.get(ref_key) # Obtenemos la letra (ej: 'a') o None
-        
-        # Formateamos el superíndice con paréntesis solo si existe la letra
-        superindice_formateado = f"({letra})" if letra else ""
-
+        letra_superindice = fila_data.get('ref')
+        superindice_formateado = f"({letra_superindice})" if letra_superindice else ""
         filas_bi_para_tabla.append({
             'descripcion_texto': fila_data['descripcion'],
-            'descripcion_superindice': superindice_formateado, # <-- Usamos la nueva variable
+            'descripcion_superindice': superindice_formateado,
             'monto': fila_data['monto']
         })
 
-    # 5. Creamos la tabla de BI (pasamos las claves nuevas)
     tabla_bi_subdoc = create_main_table_subdoc(
-        datos_comunes['doc_tpl'],
+        doc_tpl,
         ["Descripción", "Monto"],
         filas_bi_para_tabla,
-        # Las claves ahora son 'descripcion_texto' y 'monto'
-        # El superíndice se manejará dentro de la función
-        ['descripcion_texto', 'monto'] 
+        ['descripcion_texto', 'monto']
     )
+    
     tabla_multa_subdoc = create_main_table_subdoc(doc_tpl, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'])
 
     # -- 4. Ensamblaje del diccionario final para el hecho --
@@ -424,7 +420,7 @@ def procesar_infraccion(datos_comunes, datos_especificos):
         'descripcion': RichText(datos_especificos.get('texto_hecho', '')),
         'tabla_ce': tabla_ce_subdoc,
         'tabla_bi': tabla_bi_subdoc,
-        'bi_footnotes': footnotes_bi_formateadas, # <-- La nueva lista de fuentes
+        'bi_footnotes_list': footnotes_list, # <-- La nueva lista de fuentes
         'tabla_multa': tabla_multa_subdoc,
     }
 
@@ -438,7 +434,7 @@ def procesar_infraccion(datos_comunes, datos_especificos):
         'horas_numero': horas_numero,
         'horas_dias': dias_habiles, # Asumiendo que 'horas_dias' es lo mismo que 'dias_habiles'
         'fuente_cos': res_bi.get('fuente_cos', ''),
-        'fecha_incumplimiento_texto': fecha_inc_dt.strftime('%d de %B de %Y').lower(),
+        'fecha_incumplimiento_texto': fecha_incumplimiento_formateada,
         'fuente_salario': res_ce.get('fuente_salario', ''),
         'pdf_salario': res_ce.get('pdf_salario', ''),
         'fuente_coti': res_ce.get('fuente_coti', ''),
