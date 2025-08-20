@@ -352,6 +352,35 @@ if cliente_gspread:
                     
                 id_infraccion = st.session_state.imputaciones_data[i].get('id_infraccion')
                 if id_infraccion:
+                                      # --- INICIO DEL CÓDIGO DE DIAGNÓSTICO ---
+                    import os
+                    st.warning(f"🕵️ **Diagnóstico para Hecho {i+1}:**")
+                    
+                    # 1. Verificar el ID que se intenta importar
+                    st.info(f"1. ID de Infracción a importar: **'{id_infraccion}'**")
+                    
+                    # 2. Listar archivos en la carpeta de módulos
+                    try:
+                        lista_archivos = os.listdir('infracciones')
+                        st.info(f"2. Archivos encontrados en la carpeta 'infracciones': **{lista_archivos}**")
+                        
+                        # 3. Comprobar existencia del archivo específico
+                        ruta_buscada = f'infracciones/{id_infraccion}.py'
+                        existe_archivo = os.path.exists(ruta_buscada)
+                        
+                        st.info(f"3. Verificando si '{ruta_buscada}' existe...")
+                        if existe_archivo:
+                            st.success(f"   Resultado: SÍ existe ✅")
+                        else:
+                            st.error(f"   Resultado: NO existe ❌")
+
+                    except FileNotFoundError:
+                        st.error("¡ERROR DE DIAGNÓSTICO! La carpeta 'infracciones' no fue encontrada en el servidor.")
+                    except Exception as e:
+                        st.error(f"Ocurrió un error inesperado durante el diagnóstico: {e}")
+
+                    st.warning("--- Fin del Diagnóstico ---")
+                    # --- FIN DEL CÓDIGO DE DIAGNÓSTICO ---
                     try:
                         modulo_especialista = importlib.import_module(f"infracciones.{id_infraccion}")
                         datos_especificos = modulo_especialista.renderizar_inputs_especificos(i)
@@ -745,3 +774,4 @@ if all_steps_complete:
 if not cliente_gspread:
     st.error(
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
+
