@@ -98,11 +98,12 @@ def descargar_archivo_drive(file_id): # Ya no necesita 'credentials_path'
 
 def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
     """
-    Calcula el BI para casos tardíos. La tabla de resultados ahora es dinámica
-    y se simplifica si la moneda del COS es en Soles.
+    Calcula el BI para casos tardíos y devuelve los datos con control manual
+    sobre las fuentes y superíndices.
     """
     try:
-        # --- 1. Cálculos (esta parte se mantiene sin cambios) ---
+        # --- 1. Cálculos (esta parte se mantiene igual) ---
+        # ... (todo tu código para calcular bi_final_soles, etc. se mantiene)
         df_indices = datos_entrada['df_indices']
         df_uit = datos_entrada['df_uit']
         fecha_incumplimiento_calc = datos_entrada['fecha_incumplimiento']
@@ -124,46 +125,40 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
         tc_promedio_12m = tc_promedio_df['TC_Mensual'].mean() if not tc_promedio_df.empty else 0
         bi_cap_soles = ce_ajustado_cap if moneda_cos == 'S/' else ce_ajustado_cap * tc_promedio_12m
         df_indices_sorted = df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False)
-        ipc_hoy = float(df_indices_sorted.iloc[0]['IPC_Mensual']) if not df_indices_sorted.empty and df_indices_sorted.iloc[0]['IPC_Mensual'] is not None else 0
+        ipc_hoy = 0
+        if not df_indices_sorted.empty:
+            valor_ipc_hoy = df_indices_sorted.iloc[0]['IPC_Mensual']
+            if valor_ipc_hoy is not None:
+                ipc_hoy = float(valor_ipc_hoy)
         ipc_ext_row = df_indices[df_indices['Indice_Mes'].dt.to_period('M') == pd.to_datetime(fecha_cumplimiento_extemporaneo).to_period('M')]
-        ipc_ext = float(ipc_ext_row.iloc[0]['IPC_Mensual']) if not ipc_ext_row.empty and ipc_ext_row.iloc[0]['IPC_Mensual'] is not None else 0
+        ipc_ext = 0
+        if not ipc_ext_row.empty:
+            valor_ipc_ext = ipc_ext_row.iloc[0]['IPC_Mensual']
+            if valor_ipc_ext is not None:
+                ipc_ext = float(valor_ipc_ext)
         ajuste_inflacionario = ipc_hoy / ipc_ext if ipc_ext > 0 else 1
         bi_final_soles = bi_cap_soles * ajuste_inflacionario
         valor_uit_row = df_uit[df_uit['Año_UIT'] == fecha_hoy.year]
         valor_uit = float(valor_uit_row.iloc[0]['Valor_UIT']) if not valor_uit_row.empty else 0
         beneficio_ilicito_uit = bi_final_soles / valor_uit if valor_uit > 0 else 0
 
-        # --- INICIO DE LA MODIFICACIÓN ---
-        # 2. Construcción dinámica de la tabla de resultados
+
+        # --- INICIO DE LA SECCIÓN DE CONTROL MANUAL ---
+
+        # 2. Define qué letra quieres en cada fila.
         tabla_resumen_filas = [
             {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
             {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "b"},
             {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None},
             {"descripcion": f"T: Meses hasta cumplimiento extemporáneo", "monto": f"{t_cap:,.3f}", "ref": "c"},
-        ]
-
-        # Lógica condicional para las filas que cambian
-        if moneda_cos == 'S/':
-            # Si el COS es en Soles, se muestra la fila simplificada
-            tabla_resumen_filas.append(
-                {"descripcion": "Costo evitado ajustado a la fecha de cumplimiento extemporáneo", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None}
-            )
-        else:
-            # Si el COS es en Dólares, se muestran los pasos de conversión
-            tabla_resumen_filas.extend([
-                {"descripcion": "Costo evitado ajustado", "monto": f"US$ {ce_ajustado_cap:,.3f}", "ref": None},
-                {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
-                {"descripcion": f"Beneficio ilícito a la fecha de cumplimiento extemporáneo", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
-            ])
-
-        # Se añaden las filas finales que son comunes a ambos casos
-        tabla_resumen_filas.extend([
+            {"descripcion": "Costo evitado ajustado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado_cap:,.3f}", "ref": None},
+            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
+            {"descripcion": f"Beneficio ilícito a la fecha de cumplimiento extemporáneo", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
             {"descripcion": "Ajuste inflacionario", "monto": f"{ajuste_inflacionario:,.3f}", "ref": "e"},
             {"descripcion": "Beneficio ilícito a la fecha de emisión del informe", "monto": f"S/ {bi_final_soles:,.3f}", "ref": None},
             {"descripcion": f"UIT al año {fecha_hoy.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
             {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
-        ])
-        # --- FIN DE LA MODIFICACIÓN ---
+        ]
 
         # 3. Crea el mapa que conecta cada letra con el texto de la fuente. (ESTA ES LA PARTE QUE FALTABA)
         footnote_mapping = {
@@ -202,11 +197,11 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
 
 def calcular_beneficio_ilicito(datos_entrada):
     """
-    Realiza el cálculo del BI. La tabla de resultados ahora es dinámica
-    y se simplifica si la moneda del COS es en Soles.
+    Realiza el cálculo del BI y devuelve los datos en el nuevo formato estándar
+    con claves para fuentes dinámicas.
     """
     try:
-        # --- 1. Cálculos (esta parte se mantiene sin cambios) ---
+        # 1. Desempaquetado y cálculos (la mayoría de esto ya lo tenías)
         df_cos = datos_entrada['df_cos']
         df_uit = datos_entrada['df_uit']
         df_indices = datos_entrada['df_indices']
@@ -241,35 +236,20 @@ def calcular_beneficio_ilicito(datos_entrada):
         valor_uit = float(uit_info.iloc[0]['Valor_UIT']) if not uit_info.empty else 0
         beneficio_ilicito_uit = beneficio_ilicito_soles / valor_uit if valor_uit > 0 else 0
 
-        # --- INICIO DE LA MODIFICACIÓN ---
-        # 2. Construcción dinámica de la tabla de resultados
+        # --- INICIO DE LA NUEVA SECCIÓN ---
+
+        # 2. Define qué letra quieres en cada fila. Si no quieres letra, pon None.
         tabla_resumen_filas = [
             {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
             {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "b"},
-            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None},
+            {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None}, # <-- SIN LETRA
             {"descripcion": "T: meses transcurridos", "monto": f"{t_meses_decimal:,.3f}", "ref": "c"},
-        ]
-
-        # Lógica condicional para las filas que cambian
-        if moneda_cos == 'S/':
-            # Si el COS es en Soles, se muestra la fila simplificada
-            tabla_resumen_filas.append(
-                {"descripcion": "Costo evitado ajustado a la fecha de cálculo de la multa", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None}
-            )
-        else:
-            # Si el COS es en Dólares, se muestran los pasos de conversión
-            tabla_resumen_filas.extend([
-                {"descripcion": "Costo evitado ajustado", "monto": f"US$ {ce_ajustado:,.3f}", "ref": None},
-                {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
-                {"descripcion": "Beneficio ilícito (S/)", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None},
-            ])
-        
-        # Se añaden las filas finales que son comunes a ambos casos
-        tabla_resumen_filas.extend([
+            {"descripcion": "Costo evitado ajustado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce_ajustado:,.3f}", "ref": None},
+            {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
+            {"descripcion": "Beneficio ilícito (S/)", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None},
             {"descripcion": f"UIT al año {fecha_calculo.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
             {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
-        ])
-        # --- FIN DE LA MODIFICACIÓN ---
+        ]
 
         # 3. Crea un mapa que le dice al sistema qué texto corresponde a cada letra
         footnote_mapping = {
