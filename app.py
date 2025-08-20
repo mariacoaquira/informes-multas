@@ -45,25 +45,40 @@ if cliente_gspread:
     with col2:
         df_asignaciones = cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_ASIGNACIONES, mes_seleccionado)
         if df_asignaciones is not None:
-            num_expediente_simple = st.text_input("Ingresa el N° de Expediente (formato XXXX-XXXX):", placeholder="Ej: 3345-2023")
+            num_expediente_input = st.text_input("Ingresa el N° de Expediente:", placeholder="Ej: 1234-2023 o 1234-2023-OEFA/DFAI/PAS")
+            
             if st.button("Buscar Expediente", type="primary"):
-                st.session_state.clear()
-                st.session_state.app_inicializado = True
-                if num_expediente_simple and "-" in num_expediente_simple:
-                    num_formateado = f"{num_expediente_simple}-OEFA/DFAI/PAS"
+                # --- MEJORA: Limpiamos solo los datos relevantes, no toda la sesión ---
+                if 'info_expediente' in st.session_state:
+                    del st.session_state['info_expediente']
+                if 'imputaciones_data' in st.session_state:
+                    del st.session_state['imputaciones_data']
+            
+            if num_expediente_input:
+                num_formateado = ""
+                if "OEFA" in num_expediente_input.upper():
+                    num_formateado = num_expediente_input
+                elif "-" in num_expediente_input:
+                    num_formateado = f"{num_expediente_input}-OEFA/DFAI/PAS"
+
+                if num_formateado:
                     resultado = df_asignaciones[df_asignaciones['EXPEDIENTE'] == num_formateado]
                     if not resultado.empty:
-                        st.success(f"¡Expediente '{num_formateado}' encontrado!")
-                        # --- AÑADE ESTA LÍNEA ---
-                        st.session_state.num_expediente_formateado = num_formateado
-                        # ------------------------
-                        st.session_state.info_expediente = resultado.iloc[0].to_dict()
-                        num_imputaciones = int(st.session_state.info_expediente.get('IMPUTACIONES', 1))
-                        st.session_state.imputaciones_data = [{} for _ in range(num_imputaciones)]
+                        # Guardamos los datos del expediente si no los teníamos ya
+                        if 'info_expediente' not in st.session_state:
+                            st.success(f"¡Expediente '{num_formateado}' encontrado!")
+                            st.session_state.num_expediente_formateado = num_formateado
+                            st.session_state.info_expediente = resultado.iloc[0].to_dict()
+                        
+                        # --- CORRECCIÓN CLAVE ---
+                        # Solo inicializamos la lista de hechos si no existe previamente
+                        if 'imputaciones_data' not in st.session_state:
+                            num_imputaciones = int(st.session_state.info_expediente.get('IMPUTACIONES', 1))
+                            st.session_state.imputaciones_data = [{} for _ in range(num_imputaciones)]
                     else:
-                        st.error(f"No se encontró el expediente '{num_formateado}'.")
+                        st.error(f"No se encontró el expediente '{num_expediente_input}'.")
                 else:
-                    st.warning("Ingresa un número de expediente en el formato correcto.")
+                    st.warning("Ingresa un número de expediente en un formato válido.")
     st.divider()
 
     # --- PASO 2: DETALLES DEL EXPEDIENTE ---
@@ -283,13 +298,13 @@ if cliente_gspread:
 
     # --- BUCLE MODULAR PARA HECHOS IMPUTADOS ---
     if st.session_state.get('context_data'):
-        st.header("Detalles de Hechos Imputados")
+        st.header("Paso 3: Detalles de Hechos Imputados")
         df_tipificacion = cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Tipificacion_Infracciones")
         
         for i in range(len(st.session_state.get('imputaciones_data', []))):
             with st.expander(f"Hecho imputado n.° {i + 1}", expanded=(i == 0)):
                 
-                st.subheader(f"Paso 3: Detalles del Hecho {i + 1}")
+                st.subheader(f"Detalles del Hecho {i + 1}")
 
                 # Inputs comunes que siempre se muestran
                 st.session_state.imputaciones_data[i]['texto_hecho'] = st.text_area(
@@ -420,8 +435,14 @@ if cliente_gspread:
                             'monto_soles': 'Monto (S/)', 'monto_dolares': 'Monto (US$)'
                         }
                         formatters_ce = {
-                            'Precio asociado (US$)': "US$ {:,.3f}", 'Precio asociado (S/)': "{:,.3f}",
-                            'Factor de ajuste': "{:,.3f}", 'Monto (S/)': "S/ {:,.3f}", 'Monto (US$)': "US$ {:,.3f}"
+                            "Cantidad": "{:.0f}",
+                            # Esta función muestra el entero si no hay decimales, o redondea a 3 si los hay
+                            "Horas": lambda x: f"{int(x)}" if pd.notna(x) and x == int(x) else f"{x:,.3f}",
+                            "Precio (S/)": "S/ {:,.3f}",
+                            "Precio (US$)": "US$ {:,.3f}",
+                            "Factor de Ajuste": "{:,.3f}",
+                            "Monto (S/)": "S/ {:,.3f}",
+                            "Monto (US$)": "US$ {:,.3f}"
                         }
                     else:
                         # Configuración general para las demás
@@ -431,7 +452,7 @@ if cliente_gspread:
                             'factor_ajuste': 'Factor de Ajuste', 'monto_soles': 'Monto (S/)', 'monto_dolares': 'Monto (US$)'
                         }
                         formatters_ce = {
-                            "Cantidad": "{:.0f}", "Horas": "{:.0f}", "Precio (S/)": "{:,.3f}",
+                            "Cantidad": "{:.0f}", "Horas": lambda x: f"{int(x)}" if pd.notna(x) and x == int(x) else f"{x:,.3f}", "Precio (S/)": "{:,.3f}",
                             "Precio (US$)": "US$ {:,.3f}", "Factor de Ajuste": "{:,.3f}",
                             "Monto (S/)": "S/ {:,.3f}", "Monto (US$)": "US$ {:,.3f}"
                         }
@@ -485,7 +506,7 @@ if 'imputaciones_data' in st.session_state and st.session_state.imputaciones_dat
 # Si todo está listo, muestra la sección para generar el informe
 if all_steps_complete:
     st.divider()
-    st.header("Paso 7: Generar Informe Final")
+    st.header("Paso 4: Generar Informe Final")
 
     # El botón de generar informe solo se muestra si la plantilla maestra se cargó correctamente
     if st.session_state.get('template_file_buffer'):
@@ -580,6 +601,13 @@ if all_steps_complete:
                         buffer_seccion_unida.seek(0)
                         doc_seccion_tpl = DocxTemplate(buffer_seccion_unida)
                         doc_seccion_tpl.render(contexto_a_renderizar, autoescape=True)
+                        # --- INICIO DEL CÓDIGO A AÑADIR ---
+                        # Elimina el último párrafo de la sección si está vacío
+                        doc = doc_seccion_tpl.docx
+                        if doc.paragraphs and not doc.paragraphs[-1].text.strip():
+                            p_element = doc.paragraphs[-1]._element
+                            p_element.getparent().remove(p_element)
+                        # --- FIN DEL CÓDIGO A AÑADIR ---
                         buffer_seccion_rellenada = io.BytesIO()
                         doc_seccion_tpl.save(buffer_seccion_rellenada)
                         lista_secciones_finales.append(buffer_seccion_rellenada)
