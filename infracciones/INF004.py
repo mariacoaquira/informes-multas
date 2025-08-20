@@ -194,24 +194,61 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
 
 # --- FUNCIONES PÚBLICAS DEL MÓDULO ---
 
+# Archivo: inf004.txt
+
 def renderizar_inputs_especificos(i):
     """
-    Dibuja los inputs para INF004. La sección de fechas aparece
-    condicionalmente después de seleccionar el estado de la remisión.
+    Versión corregida y estable que consolida todas las funcionalidades:
+    - Validación de fecha extemporánea.
+    - Sugerencia inteligente de ítems en el segundo hecho.
+    - Carga de archivo condicional.
+    - Layout de dos columnas visible desde el inicio para mayor estabilidad.
     """
     st.markdown("##### Detalles del Requerimiento")
     datos_especificos = {}
     
-    # --- Definimos las variables de fecha al inicio ---
-    fecha_solicitud = None
-    fecha_entrega = None
-
-    # --- INICIO DE LA LÓGICA SECUENCIAL ---
-    # 1. Mostramos la primera parte de la interfaz incondicionalmente
-    
-    # Mantenemos la estructura de dos columnas para un layout estable
     col1, col2 = st.columns(2)
 
+    # --- PASO 1: PROCESAMOS LA COLUMNA 2 PRIMERO ---
+    # Esto es crucial para definir 'fecha_entrega' y usarla en la validación de la columna 1.
+    with col2:
+        fecha_solicitud = None
+        fecha_entrega = None
+
+        if i > 0 and st.session_state.imputaciones_data[0].get('fecha_solicitud'):
+            st.info("Usando fechas del Hecho Imputado n.° 1.", icon="ℹ️")
+            fecha_solicitud_base = st.session_state.imputaciones_data[0].get('fecha_solicitud')
+            fecha_entrega_base = st.session_state.imputaciones_data[0].get('fecha_max_entrega')
+
+            if fecha_solicitud_base and fecha_entrega_base:
+                st.text_input("Fecha de solicitud (del Hecho 1)", value=fecha_solicitud_base.strftime('%d/%m/%Y'), disabled=True, key=f"fecha_sol_disp_{i}")
+                st.text_input("Fecha máxima de entrega (del Hecho 1)", value=fecha_entrega_base.strftime('%d/%m/%Y'), disabled=True, key=f"fecha_ent_disp_{i}")
+                fecha_solicitud = fecha_solicitud_base
+                fecha_entrega = fecha_entrega_base
+        else:
+            fecha_solicitud = st.date_input("Fecha de solicitud", key=f"fecha_sol_{i}", format="DD/MM/YYYY", value=None)
+            # La fecha máxima de entrega no puede ser anterior a la de solicitud
+            min_fecha_entrega = fecha_solicitud if fecha_solicitud else None
+            fecha_entrega = st.date_input("Fecha máxima de entrega", min_value=min_fecha_entrega, key=f"fecha_ent_{i}", format="DD/MM/YYYY", value=None)
+
+        if fecha_solicitud and fecha_entrega:
+            feriados_pe = holidays.PE()
+            rango_dias = pd.date_range(start=fecha_solicitud, end=fecha_entrega)
+            dias_habiles = sum(1 for dia in rango_dias[1:] if dia.weekday() < 5 and dia not in feriados_pe)
+            fecha_incumplimiento = fecha_entrega
+            while True:
+                fecha_incumplimiento += timedelta(days=1)
+                if fecha_incumplimiento.weekday() < 5 and fecha_incumplimiento not in feriados_pe:
+                     break
+            
+            datos_especificos['dias_habiles_plazo'] = dias_habiles
+            datos_especificos['fecha_incumplimiento'] = fecha_incumplimiento
+            
+            st.metric(label="Días Hábiles de Plazo", value=dias_habiles)
+            st.info(f"Fecha de Incumplimiento: **{fecha_incumplimiento.strftime('%d/%m/%Y')}**")
+
+    # --- PASO 2: AHORA PROCESAMOS LA COLUMNA 1 ---
+    # Ya tenemos el valor de 'fecha_entrega' y podemos usarlo para la validación.
     with col1:
         if i > 0 and st.session_state.imputaciones_data[0].get('num_items_solicitados'):
             num_total_base = st.session_state.imputaciones_data[0].get('num_items_solicitados', 1)
@@ -224,115 +261,46 @@ def renderizar_inputs_especificos(i):
             "Estado de la remisión:", options=["No remitió información", "Remitió fuera de plazo"], index=None, key=f"estado_remision_{i}")
         datos_especificos['estado_entrega'] = estado_remision
 
-    # 2. La segunda columna (fechas) solo aparece si se ha seleccionado un estado
-    with col2:
-        if estado_remision:  # Esta condición es la clave del cambio
-            if i > 0 and st.session_state.imputaciones_data[0].get('fecha_solicitud'):
-                st.info("Usando fechas del Hecho Imputado n.° 1.")
-                fecha_solicitud_base = st.session_state.imputaciones_data[0].get('fecha_solicitud')
-                fecha_entrega_base = st.session_state.imputaciones_data[0].get('fecha_max_entrega')
-
-                if fecha_solicitud_base and fecha_entrega_base:
-                    st.text_input("Fecha de solicitud (del Hecho 1)", value=fecha_solicitud_base.strftime('%d/%m/%Y'), disabled=True, key=f"fecha_sol_disp_{i}")
-                    st.text_input("Fecha máxima de entrega (del Hecho 1)", value=fecha_entrega_base.strftime('%d/%m/%Y'), disabled=True, key=f"fecha_ent_disp_{i}")
-                    fecha_solicitud = fecha_solicitud_base
-                    fecha_entrega = fecha_entrega_base
-            else:
-                fecha_solicitud = st.date_input("Fecha de solicitud", key=f"fecha_sol_{i}", format="DD/MM/YYYY", value=None)
-                fecha_entrega = st.date_input("Fecha máxima de entrega", key=f"fecha_ent_{i}", format="DD/MM/YYYY", value=None)
-
-            if fecha_solicitud and fecha_entrega:
-                feriados_pe = holidays.PE()
-                rango_dias = pd.date_range(start=fecha_solicitud, end=fecha_entrega)
-                dias_habiles = sum(1 for dia in rango_dias[1:] if dia.weekday() < 5 and dia not in feriados_pe)
-                fecha_incumplimiento = fecha_entrega
-                while True:
-                    fecha_incumplimiento += timedelta(days=1)
-                    if fecha_incumplimiento.weekday() < 5 and fecha_incumplimiento not in feriados_pe:
-                         break
-                
-                datos_especificos['dias_habiles_plazo'] = dias_habiles
-                datos_especificos['fecha_incumplimiento'] = fecha_incumplimiento
-                
-                st.metric(label="Días Hábiles de Plazo", value=dias_habiles)
-                st.info(f"Fecha de Incumplimiento: **{fecha_incumplimiento.strftime('%d/%m/%Y')}**")
-
-    # 3. La segunda parte de la Columna 1 también depende de la selección de estado
-    with col1:
-        if estado_remision:
-            items_afectados = 0
-            if estado_remision == "No remitió información":
-                items_afectados = st.number_input("Cantidad de ítems no remitidos", min_value=1, max_value=num_total, step=1, key=f"items_no_remitidos_{i}")
-            
-            elif estado_remision == "Remitió fuera de plazo":
-                fecha_extemporanea_input = st.date_input(
-                    "Fecha de cumplimiento extemporáneo",
-                    min_value=fecha_entrega if fecha_entrega else None,
-                    key=f"fecha_ext_{i}", format="DD/MM/YYYY", value=None, disabled=(fecha_entrega is None))
-                datos_especificos['fecha_cumplimiento_extemporaneo'] = fecha_extemporanea_input
-
-                valor_sugerido = 1
-                if i > 0 and st.session_state.imputaciones_data[0].get('estado_entrega') == 'No remitió información':
-                    try:
-                        total_items_base = st.session_state.imputaciones_data[0].get('num_items_solicitados', 0)
-                        items_no_remitidos_base = st.session_state.imputaciones_data[0].get('items_afectados', 0)
-                        items_restantes = total_items_base - items_no_remitidos_base
-                        if items_restantes > 0: valor_sugerido = items_restantes
-                    except Exception: valor_sugerido = 1
-                
-                items_afectados = st.number_input(
-                    "Cantidad de ítems remitidos fuera de plazo", min_value=1, max_value=num_total, value=int(valor_sugerido), key=f"items_remitidos_tarde_{i}")
-
-            datos_especificos['items_afectados'] = items_afectados
-    
-    # 4. El cargador de archivos también es condicional
-    if estado_remision:
-        st.divider()
-        hubo_alegatos = st.radio(
-            "¿Hubo alegatos económicos a la multa?", options=["No", "Sí"], index=0, key=f"hubo_alegatos_{i}", horizontal=True)
+        items_afectados = 0
+        if estado_remision == "No remitió información":
+            items_afectados = st.number_input("Cantidad de ítems no remitidos", min_value=1, max_value=num_total, step=1, key=f"items_no_remitidos_{i}")
         
-        if hubo_alegatos == "Sí":
-            datos_especificos['doc_adjunto_hecho'] = st.file_uploader(
-                "Adjuntar archivo con el análisis de los alegatos (Word .docx)", type=['docx'], key=f"upload_analisis_{i}")
-        else:
-            datos_especificos['doc_adjunto_hecho'] = None
+        elif estado_remision == "Remitió fuera de plazo":
+            fecha_extemporanea_input = st.date_input(
+                "Fecha de cumplimiento extemporáneo",
+                min_value=fecha_entrega if fecha_entrega else None,
+                key=f"fecha_ext_{i}", format="DD/MM/YYYY", value=None, disabled=(fecha_entrega is None))
+            datos_especificos['fecha_cumplimiento_extemporaneo'] = fecha_extemporanea_input
+
+            valor_sugerido = 1
+            if i > 0 and st.session_state.imputaciones_data[0].get('estado_entrega') == 'No remitió información':
+                try:
+                    total_items_base = st.session_state.imputaciones_data[0].get('num_items_solicitados', 0)
+                    items_no_remitidos_base = st.session_state.imputaciones_data[0].get('items_afectados', 0)
+                    items_restantes = total_items_base - items_no_remitidos_base
+                    if items_restantes > 0: valor_sugerido = items_restantes
+                except Exception: valor_sugerido = 1
+            
+            items_afectados = st.number_input(
+                "Cantidad de ítems remitidos fuera de plazo", min_value=1, max_value=num_total, value=int(valor_sugerido), key=f"items_remitidos_tarde_{i}")
+
+        datos_especificos['items_afectados'] = items_afectados
+    
+    # --- PASO 3: ELEMENTOS FINALES (FUERA DE LAS COLUMNAS) ---
+    st.divider()
+    hubo_alegatos = st.radio(
+        "¿Hubo alegatos económicos a la multa?", options=["No", "Sí"], index=0, key=f"hubo_alegatos_{i}", horizontal=True)
+    
+    if hubo_alegatos == "Sí":
+        datos_especificos['doc_adjunto_hecho'] = st.file_uploader(
+            "Adjuntar archivo con el análisis de los alegatos (Word .docx)", type=['docx'], key=f"upload_analisis_{i}")
+    else:
+        datos_especificos['doc_adjunto_hecho'] = None
     
     datos_especificos['fecha_solicitud'] = fecha_solicitud
     datos_especificos['fecha_max_entrega'] = fecha_entrega
     
     return datos_especificos
-
-def validar_inputs(datos_especificos):
-    """
-    Valida que TODOS los inputs específicos de INF004 estén completos.
-    """
-    # 1. Validar que las fechas principales estén seleccionadas
-    if not datos_especificos.get('fecha_solicitud'):
-        return False
-    if not datos_especificos.get('fecha_max_entrega'):
-        return False
-
-    # 2. Validar que el número de requerimientos sea mayor que cero
-    if not datos_especificos.get('num_items_solicitados'):
-        return False
-
-    # 3. Validar que se haya seleccionado una opción en el estado de remisión
-    estado = datos_especificos.get('estado_entrega')
-    if not estado:
-        return False
-    
-    # Si el estado es uno de los no permitidos, la validación falla
-    opciones_deshabilitadas = ["Remitió parcial", "Remitió parcial pero tardío"]
-    if estado in opciones_deshabilitadas:
-        return False
-
-    # 4. Validación condicional: si es tardío, debe tener la fecha extemporánea
-    if datos_especificos.get('estado_entrega') == "Remitió completo pero tardío":
-        if not datos_especificos.get('fecha_cumplimiento_extemporaneo'):
-            return False
-            
-    # Si todas las validaciones anteriores pasan, todo está OK
-    return True
 
 
 def procesar_infraccion(datos_comunes, datos_especificos):
