@@ -194,8 +194,6 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
 
 # --- FUNCIONES PÚBLICAS DEL MÓDULO ---
 
-# Archivo: inf004.txt
-
 def renderizar_inputs_especificos(i):
     """
     Versión corregida y estable que consolida todas las funcionalidades:
