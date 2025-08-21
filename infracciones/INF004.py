@@ -8,7 +8,7 @@ from docx.shared import Pt
 from datetime import date, timedelta
 import holidays
 from textos_manager import obtener_fuente_formateada
-from funciones import create_main_table_subdoc, create_table_subdoc, create_footnotes_subdoc
+from funciones import create_main_table_subdoc, create_table_subdoc, create_footnotes_subdoc, texto_con_numero
 from sheets import calcular_beneficio_ilicito, calcular_multa, descargar_archivo_drive, calcular_beneficio_ilicito_extemporaneo
 
 # --- CÁLCULO DEL COSTO EVITADO PARA INF004 ---
@@ -55,8 +55,10 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
         sustentos_final = []
         lineas_resumen_fuentes = []
         fuente_salario_final, pdf_salario_final = '', ''
+        sustento_profesional_final = "" 
         sustentos_de_cotizaciones = []
         salario_info_capturado = False
+        placeholders_fuentes = {}
 
         receta_df = df_items_infracciones[df_items_infracciones['ID_Infraccion'] == id_infraccion]
 
@@ -151,6 +153,36 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
             lineas_resumen_fuentes.append(f"{descripcion_item}: {fc_texto}, IPC={ipc_fc_texto}")
             # --- FIN: Captura de datos ---
 
+            # --- INICIO DE LA MODIFICACIÓN ---
+            
+            # 1. Obtenemos los datos necesarios
+            descripcion_item = item_receta.get('Descripcion_Item', '')
+            fecha_fuente_dt = fila_costo_final['Fecha_Fuente']
+            ipc_costeo_valor = ipc_costeo # Este es el IPC ya calculado (promedio o mensual)
+
+            # 2. Creamos el nombre del placeholder (ej: 'fuente_profesionales')
+            key_placeholder = f"fuente_{descripcion_item.split()[0].lower()}"
+
+            # 3. Formateamos la fecha y el texto final
+            fecha_formateada = format_date(fecha_fuente_dt, 'MMMM yyyy', locale='es').lower()
+            texto_fuente = f"{descripcion_item}: {fecha_formateada}, IPC={ipc_costeo_valor:,.3f}"
+            
+            # 4. Guardamos el texto en nuestro diccionario de placeholders
+            placeholders_fuentes[key_placeholder] = texto_fuente
+            # --- INICIO DE LAS MODIFICACIONES ---
+
+            # 2. CAPTURAMOS EL SUSTENTO SI ES EL ÍTEM DEL PROFESIONAL
+            descripcion_item_receta = item_receta.get('Descripcion_Item', '')
+            if "Profesional" in descripcion_item_receta:
+                sustento_profesional_final = fila_costo_final.get('Sustento_Item', '')
+
+            # 3. USAMOS LA DESCRIPCIÓN ESTÁNDAR DE LA "RECETA"
+            descripcion_estandar = item_receta.get('Descripcion_Item', 'N/A')
+            if "Profesionales científicos e intelectuales" in descripcion_estandar:
+                descripcion_estandar = "Profesional"
+
+            # --- FIN DE LAS MODIFICACIONES ---
+
             # 4. Cálculo de montos para el ítem seleccionado
             costo_original = float(fila_costo_final['Costo_Unitario_Item'])
             moneda_original = fila_costo_final['Moneda_Item']
@@ -165,7 +197,7 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
             monto_dolares = monto_soles / tipo_cambio_incumplimiento if tipo_cambio_incumplimiento > 0 else 0
 
             items_calculados_final.append({
-                "descripcion": fila_costo_final.get('Descripcion_Item', 'N/A'),
+                "descripcion": descripcion_estandar,
                 "cantidad": cantidad, "horas": horas, "precio_soles": precio_base_soles,
                 "factor_ajuste": factor_ajuste, "monto_soles": monto_soles,
                 "monto_dolares": monto_dolares
@@ -180,6 +212,8 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
         # Devuelve la lista de IDs recolectada
         return {
     "items_calculados": items_calculados_final,
+    "placeholders_fuentes": placeholders_fuentes,
+    "sustento_profesional": sustento_profesional_final,
     "ids_anexos": list(set(ids_anexos_final)),
     "sustentos": list(set(sustentos_final)),
     "fuente_salario": fuente_salario_final,
@@ -194,7 +228,6 @@ def _calcular_costo_evitado_inf004(datos_comunes, datos_especificos):
 
 # --- FUNCIONES PÚBLICAS DEL MÓDULO ---
 
-# Archivo: inf004.py
 
 def renderizar_inputs_especificos(i):
     """
@@ -203,15 +236,21 @@ def renderizar_inputs_especificos(i):
     """
     st.markdown("##### Detalles del Requerimiento")
     datos_especificos = {}
+
+    # --- CORRECCIÓN ---
+    # Inicializamos las variables aquí, al inicio de la función.
+    # Esto asegura que siempre existan, incluso si los bloques condicionales no se ejecutan.
+    fecha_solicitud = None
+    fecha_entrega = None
+    # --- FIN DE LA CORRECCIÓN ---
     
     # --- LÓGICA PARA VINCULAR HECHOS ---
     heredar_datos = False
     decision_tomada = True # Por defecto es True para el primer hecho
 
     if i > 0:
-        st.markdown("---")
         decision = st.radio(
-            "**¿Este requerimiento está vinculado al Hecho n.° 1?**",
+            "**¿Es parte del requerimiento del hecho imputado anterior?**",
             options=["Sí", "No"],
             key=f"heredar_datos_{i}",
             index=None,
@@ -235,7 +274,7 @@ def renderizar_inputs_especificos(i):
             fecha_entrega = None
 
             if heredar_datos:
-                st.info("Usando fechas del Hecho Imputado n.° 1.", icon="ℹ️")
+                st.info("Usando fechas del Hecho Imputado n.° 1.")
                 fecha_solicitud_base = st.session_state.imputaciones_data[0].get('fecha_solicitud')
                 fecha_entrega_base = st.session_state.imputaciones_data[0].get('fecha_max_entrega')
 
@@ -306,7 +345,7 @@ def renderizar_inputs_especificos(i):
         # --- ELEMENTOS FINALES (FUERA DE LAS COLUMNAS) ---
         st.divider()
         hubo_alegatos = st.radio(
-            "¿Hubo alegatos económicos a la multa?", options=["No", "Sí"], index=0, key=f"hubo_alegatos_{i}", horizontal=True)
+            "¿Hubo alegatos a la multa?", options=["No", "Sí"], index=0, key=f"hubo_alegatos_{i}", horizontal=True)
         
         if hubo_alegatos == "Sí":
             datos_especificos['doc_adjunto_hecho'] = st.file_uploader(
@@ -363,7 +402,7 @@ def procesar_infraccion(datos_comunes, datos_especificos):
     # 2. Decidir qué función de Beneficio Ilícito usar
     estado_entrega = datos_especificos.get('estado_entrega')
     
-    datos_bi_base = {**datos_comunes, 'ce_soles': total_soles, 'ce_dolares': total_dolares, 'fecha_incumplimiento': datos_especificos['fecha_incumplimiento']}
+    datos_bi_base = {**datos_comunes, 'ce_soles': total_soles, 'ce_dolares': total_dolares, 'fecha_incumplimiento': datos_especificos['fecha_incumplimiento'],         'texto_del_hecho': datos_especificos.get('texto_hecho', 'Hecho no especificado')}
     
     # --- INICIO DE LA CORRECCIÓN ---
     # La condición ahora busca el texto correcto de la interfaz
@@ -472,14 +511,38 @@ def procesar_infraccion(datos_comunes, datos_especificos):
             'monto': fila_data['monto']
         })
 
+    # 2. Creamos el diccionario 'footnotes_data' con toda la información
+    footnotes_data = {
+        'list': footnotes_list,
+        'elaboration': 'Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI.',
+        'style': 'FuenteTabla'
+    }
+    anchos_para_tabla_bi = (5, 1) # 4.5 pulgadas para Descripción, 1.5 para Monto
+
+    # 3. Creamos la tabla de BI, pasándole el nuevo diccionario
     tabla_bi_subdoc = create_main_table_subdoc(
         doc_tpl,
         ["Descripción", "Monto"],
         filas_bi_para_tabla,
-        ['descripcion_texto', 'monto']
+        ['descripcion_texto', 'monto'],
+        footnotes_data=footnotes_data,  # <-- Aquí está la magia
+        column_widths=anchos_para_tabla_bi # <-- Aquí pasas los anchos
     )
+
+    # Define el texto que quieres añadir
+    texto_elaboracion = "Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI."
     
-    tabla_multa_subdoc = create_main_table_subdoc(doc_tpl, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'])
+    anchos_para_tabla_multa = (5, 1)
+    # Pasa el texto al crear la tabla de la multa
+    tabla_multa_subdoc = create_main_table_subdoc(
+        doc_tpl, 
+        ["Componentes", "Monto"], 
+        res_multa.get('multa_data_raw', []), 
+        ['Componentes', 'Monto'],
+        texto_posterior=texto_elaboracion,
+        estilo_texto_posterior='FuenteTabla',
+        column_widths=anchos_para_tabla_multa # <-- Aquí pasas los anchos
+    )
 
     footnotes_subdoc = create_footnotes_subdoc(
         doc_tpl, 
@@ -487,39 +550,66 @@ def procesar_infraccion(datos_comunes, datos_especificos):
         style_name='FuenteTabla'  # <-- ¡AQUÍ ESTÁ LA MAGIA!
     )
 
-    # --- INICIO DE LA NUEVA LÓGICA PARA TEXTO CONDICIONAL ---
-    
+    # --- INICIO DEL BLOQUE MODIFICADO ---
     estado_entrega = datos_especificos.get('estado_entrega')
-    texto_razonabilidad = ""  # Empezamos con un texto vacío por defecto
+    texto_razonabilidad = ""
 
-    # 1. Extraemos los datos que necesitamos de los cálculos ya hechos
+    # 1. Extraemos los datos
     dias_plazo = datos_especificos.get('dias_habiles_plazo', 0)
     total_items = datos_especificos.get('num_items_solicitados', 0)
     items_afectados = datos_especificos.get('items_afectados', 0)
     
-    # Las horas son las mismas para todos los items del CE, así que tomamos el valor del primer item
     horas_calculadas = 0
     if ce_data_raw:
         horas_calculadas = ce_data_raw[0].get('horas', 0)
+    dias_equivalentes = horas_calculadas / 8
 
-    # Calculamos su equivalente en días de 8 horas
-    dias_equivalentes = round(horas_calculadas / 8, 1)
+    # 2. Usamos la nueva función para formatear cada número
+    dias_plazo_texto = texto_con_numero(dias_plazo, genero='m')
+    total_items_texto = texto_con_numero(total_items, genero='f')
+    items_afectados_texto = texto_con_numero(items_afectados)
+    horas_texto_formato = texto_con_numero(horas_calculadas, genero='f')
+    dias_equiv_texto = texto_con_numero(dias_equivalentes, genero='m')
 
-    # 2. Construimos la oración correcta según el caso
+    # 3. Construimos la oración con los textos ya formateados
     if estado_entrega == "No remitió información":
         texto_razonabilidad = (
-            f"Toda vez que en el presente hecho se le otorgaron {dias_plazo} días para la realización de {total_items} actividades; "
-            f"siendo que no remitió {items_afectados}, por lo tanto se considerará 01 profesional por un periodo de "
-            f"{horas_calculadas:,.2f} horas de trabajo ({dias_equivalentes} días de trabajo), ello en virtud al principio de razonabilidad."
+            f"Toda vez que en el presente hecho se le otorgaron {dias_plazo_texto} días para la realización de {total_items_texto} actividades; "
+            f"siendo que no remitió {items_afectados_texto}, por lo tanto, se considerará un (01) profesional por un periodo de "
+            f"{horas_texto_formato} horas de trabajo ({dias_equiv_texto} días de trabajo), ello en virtud al principio de razonabilidad."
         )
     elif estado_entrega == "Remitió fuera de plazo":
         texto_razonabilidad = (
-            f"Toda vez que en el presente hecho se le otorgaron {dias_plazo} días para la realización de {total_items} actividades; "
-            f"siendo que remitió tardíamente {items_afectados}, por lo tanto se considerará 01 profesional por un periodo de "
-            f"{horas_calculadas:,.2f} horas de trabajo ({dias_equivalentes} días de trabajo), ello en virtud al principio de razonabilidad."
+            f"Toda vez que en el presente hecho se le otorgaron {dias_plazo_texto} días para la realización de {total_items_texto} actividades; "
+            f"siendo que remitió tardíamente {items_afectados_texto}, por lo tanto, se considerará un (01) profesional por un periodo de "
+            f"{horas_texto_formato} horas de trabajo ({dias_equiv_texto} días de trabajo), ello en virtud al principio de razonabilidad."
         )
+    # --- FIN DEL BLOQUE MODIFICADO ---
+
+        # --- INICIO DE LA MODIFICACIÓN ---
+    # Obtenemos la LISTA de fuentes del cálculo
+    lista_fuentes = res_ce.get('resumen_fuentes_costo_list', [])
     
-    # --- FIN DE LA NUEVA LÓGICA ---
+    # Creamos un objeto RichText para un control preciso del formato
+    resumen_fuentes_rt = RichText()
+    if lista_fuentes:
+        # Añadimos la primera línea
+        resumen_fuentes_rt.add(lista_fuentes[0], style='FuenteTabla')
+        # Añadimos las líneas siguientes, cada una en un nuevo párrafo
+        for linea in lista_fuentes[1:]:
+            resumen_fuentes_rt.add('\a', style='FuenteTabla') # '\a' es el código para un nuevo párrafo
+            resumen_fuentes_rt.add(linea, style='FuenteTabla')
+
+    # Obtenemos el diccionario de placeholders del cálculo
+    placeholders_fuentes = res_ce.get('placeholders_fuentes', {})
+
+        # --- INICIO DE LA MODIFICACIÓN ---
+    # 1. Obtenemos el número del hecho actual
+    numero_hecho = datos_comunes['numero_hecho_actual']
+    
+    # 2. Creamos el nuevo texto del numeral (número de hecho + 1)
+    numeral_dinamico = f"IV.{numero_hecho + 1}"
+    # --- FIN DE LA MODIFICACIÓN ---
 
     # -- 4. Ensamblaje del diccionario final para el hecho --
     datos_para_hecho = {
@@ -533,7 +623,10 @@ def procesar_infraccion(datos_comunes, datos_especificos):
 
     contexto_final = {
         **datos_comunes['context_data'],
+        **placeholders_fuentes,
         'hecho': datos_para_hecho,
+        'numeral_hecho': numeral_dinamico, 
+        'sustento_item_profesional': res_ce.get('sustento_profesional', ''),
         'texto_condicional_razonabilidad': texto_razonabilidad,
         'mh_uit': f"{multa_uit:,.3f} UIT",
         'bi_uit': f"{beneficio_ilicito_uit:,.3f} UIT",
@@ -549,7 +642,7 @@ def procesar_infraccion(datos_comunes, datos_especificos):
         'fi_mes': fi_mes,
         'fi_ipc': fi_ipc,
         'fi_tc': fi_tc,
-        'resumen_fuentes_costo': res_ce.get('resumen_fuentes_costo', '')
+        'resumen_fuentes_costo': resumen_fuentes_rt,
         # --- FIN: Inclusión ---
     }
 
