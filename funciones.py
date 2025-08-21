@@ -291,3 +291,17 @@ def create_summary_table_subdoc(doc_template, headers, data, keys):
     set_cell_shading(total_cells[1], SHADING_COLOR)
 
     return sub
+
+def create_footnotes_subdoc(doc_template, footnotes_list, style_name='FuenteTabla', title_font_size=8):
+    """
+    Crea un subdocumento para el bloque de fuentes aplicando un estilo de párrafo específico.
+    """
+    sub = doc_template.new_subdoc()
+    
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Añadimos cada fuente usando el ESTILO que nos pasen como parámetro
+    for text in footnotes_list:
+        sub.add_paragraph(text, style=style_name)
+    # --- FIN DE LA MODIFICACIÓN ---
+
+    return sub
