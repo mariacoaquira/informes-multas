@@ -352,6 +352,11 @@ if cliente_gspread:
                     
                 id_infraccion = st.session_state.imputaciones_data[i].get('id_infraccion')
                 if id_infraccion:
+                    import os, sys, glob
+  
+                    st.write("DEBUG sys.path:", sys.path)
+                    st.write("DEBUG current dir:", os.getcwd())
+                    st.write("DEBUG archivos infracciones:", glob.glob("infracciones/*.py"))
                     try:
                         st.write(f"DEBUG: intentando importar infracciones.{id_infraccion}")
                         modulo_especialista = importlib.import_module(f"infracciones.{id_infraccion}")
@@ -746,4 +751,5 @@ if all_steps_complete:
 if not cliente_gspread:
     st.error(
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
+
 
