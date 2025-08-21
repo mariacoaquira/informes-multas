@@ -103,6 +103,9 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
     """
     try:
         # --- 1. Cálculos (esta parte se mantiene sin cambios) ---
+                # --- INICIO DE LA MODIFICACIÓN ---
+        # 1. Obtenemos el texto del hecho que pasamos en el paso anterior
+        texto_hecho = datos_entrada.get('texto_del_hecho', 'CE para el hecho imputado')
         df_indices = datos_entrada['df_indices']
         df_uit = datos_entrada['df_uit']
         fecha_incumplimiento_calc = datos_entrada['fecha_incumplimiento']
@@ -136,32 +139,32 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
         # --- INICIO DE LA MODIFICACIÓN ---
         # 2. Construcción dinámica de la tabla de resultados
         tabla_resumen_filas = [
-            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
+            {"descripcion": f"CE: {texto_hecho}", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
             {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "b"},
             {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None},
-            {"descripcion": f"T: Meses hasta cumplimiento extemporáneo", "monto": f"{t_cap:,.3f}", "ref": "c"},
+            {"descripcion": f"T: Meses transcurridos desde el periodo de incumplimiento hasta la fecha de cumplimiento extemporáneo", "monto": f"{t_cap:,.3f}", "ref": "c"},
         ]
 
         # Lógica condicional para las filas que cambian
         if moneda_cos == 'S/':
             # Si el COS es en Soles, se muestra la fila simplificada
             tabla_resumen_filas.append(
-                {"descripcion": "Costo evitado ajustado a la fecha de cumplimiento extemporáneo", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None}
+                {"descripcion": "Costo evitado ajustado a la fecha de cumplimiento extemporáneo de la conducta [CE*(1+COSm)T]", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": "d"}
             )
         else:
             # Si el COS es en Dólares, se muestran los pasos de conversión
             tabla_resumen_filas.extend([
-                {"descripcion": "Costo evitado ajustado", "monto": f"US$ {ce_ajustado_cap:,.3f}", "ref": None},
-                {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
-                {"descripcion": f"Beneficio ilícito a la fecha de cumplimiento extemporáneo", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
+                {"descripcion": "Costo evitado ajustado a la fecha de cumplimiento extemporáneo de la conducta [CE*(1+COSm)T]", "monto": f"US$ {ce_ajustado_cap:,.3f}", "ref": "d"},
+                {"descripcion": "Tipo de cambio promedio de los últimos 12 meses a fecha de cumplimiento extemporáneo", "monto": f"{tc_promedio_12m:,.3f}", "ref": "None"},
+                {"descripcion": f"Beneficio ilícito a la fecha de cumplimiento extemporáneo (S/)", "monto": f"S/ {bi_cap_soles:,.3f}", "ref": None},
             ])
 
         # Se añaden las filas finales que son comunes a ambos casos
         tabla_resumen_filas.extend([
-            {"descripcion": "Ajuste inflacionario", "monto": f"{ajuste_inflacionario:,.3f}", "ref": "e"},
-            {"descripcion": "Beneficio ilícito a la fecha de emisión del informe", "monto": f"S/ {bi_final_soles:,.3f}", "ref": None},
-            {"descripcion": f"UIT al año {fecha_hoy.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
-            {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
+            {"descripcion": "Ajuste inflacionario desde la fecha de cumplimiento extemporáneo hasta la fecha de emisión del presente informe", "monto": f"{ajuste_inflacionario:,.3f}", "ref": "e"},
+            {"descripcion": "Beneficio ilícito a la fecha de emisión del informe (S/)", "monto": f"S/ {bi_final_soles:,.3f}", "ref": "f"},
+            {"descripcion": f"Unidad Impositiva Tributaria al año {fecha_hoy.year} - UIT {fecha_hoy.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": "g"},
+            {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f} UIT", "ref": None}
         ])
         # --- FIN DE LA MODIFICACIÓN ---
 
@@ -170,8 +173,10 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
             'a': 'ce_anexo',
             'b': 'cok',
             'c': 'periodo_bi_ext',
-            'd': 'bcrp',
-            'e': 'ipc_fecha'
+            'd': 'ce_ext',
+            'e': 'ajuste_inflacionario_detalle',
+            'f': 'ipc_fecha',
+            'g': 'sunat'
         }
 
         # 4. Recolecta los datos necesarios para formatear las plantillas.
@@ -184,6 +189,11 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
             'mes_actual_texto': format_date(fecha_hoy, "MMMM 'de' yyyy", locale='es'),
             'ultima_fecha_ipc_texto': format_date(df_indices.dropna(subset=['Indice_Mes']).sort_values(by='Indice_Mes', ascending=False).iloc[0]['Indice_Mes'], 'MMMM yyyy', locale='es'),
             'fecha_hoy_texto': format_date(fecha_hoy, "d 'de' MMMM 'de' yyyy", locale='es'),
+                        # --- AÑADE ESTAS LÍNEAS ---
+            'mes_ipc_hoy_texto': format_date(df_indices_sorted.iloc[0]['Indice_Mes'], "MMMM 'de' yyyy", locale='es'),
+            'mes_ipc_ext_texto': format_date(fecha_cumplimiento_extemporaneo, "MMMM 'de' yyyy", locale='es'),
+            'valor_ipc_hoy': f"{ipc_hoy:,.3f}",
+            'valor_ipc_ext': f"{ipc_ext:,.3f}"
         }
 
         # 5. Devolver la estructura de datos completa y estandarizada.
@@ -207,6 +217,10 @@ def calcular_beneficio_ilicito(datos_entrada):
     """
     try:
         # --- 1. Cálculos (esta parte se mantiene sin cambios) ---
+                # --- INICIO DE LA MODIFICACIÓN ---
+        # 1. Obtenemos el texto del hecho que pasamos en el paso anterior
+        texto_hecho = datos_entrada.get('texto_del_hecho', 'CE para el hecho imputado')
+
         df_cos = datos_entrada['df_cos']
         df_uit = datos_entrada['df_uit']
         df_indices = datos_entrada['df_indices']
@@ -244,30 +258,30 @@ def calcular_beneficio_ilicito(datos_entrada):
         # --- INICIO DE LA MODIFICACIÓN ---
         # 2. Construcción dinámica de la tabla de resultados
         tabla_resumen_filas = [
-            {"descripcion": "CE para el hecho imputado", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
+            {"descripcion": f"CE: {texto_hecho}", "monto": f"{'S/' if moneda_cos == 'S/' else 'US$'} {ce:,.3f}", "ref": "a"},
             {"descripcion": "COS (anual)", "monto": f"{cos_anual:,.3%}", "ref": "b"},
             {"descripcion": "COSm (mensual)", "monto": f"{cos_mensual:,.3%}", "ref": None},
-            {"descripcion": "T: meses transcurridos", "monto": f"{t_meses_decimal:,.3f}", "ref": "c"},
+            {"descripcion": "T: meses transcurridos durante el periodo de incumplimiento", "monto": f"{t_meses_decimal:,.3f}", "ref": "c"},
         ]
 
         # Lógica condicional para las filas que cambian
         if moneda_cos == 'S/':
             # Si el COS es en Soles, se muestra la fila simplificada
             tabla_resumen_filas.append(
-                {"descripcion": "Costo evitado ajustado a la fecha de cálculo de la multa", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None}
+                {"descripcion": "Costo evitado ajustado a la fecha del cálculo de la multa [CE*(1+COSm)T]", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None}
             )
         else:
             # Si el COS es en Dólares, se muestran los pasos de conversión
             tabla_resumen_filas.extend([
-                {"descripcion": "Costo evitado ajustado", "monto": f"US$ {ce_ajustado:,.3f}", "ref": None},
-                {"descripcion": "Tipo de cambio promedio", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
-                {"descripcion": "Beneficio ilícito (S/)", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None},
+                {"descripcion": "Costo evitado ajustado a la fecha del cálculo de la multa [CE*(1+COSm)T]", "monto": f"US$ {ce_ajustado:,.3f}", "ref": None},
+                {"descripcion": "Tipo de cambio promedio de los últimos 12 meses", "monto": f"{tc_promedio_12m:,.3f}", "ref": "d"},
+                {"descripcion": "Beneficio ilícito a la fecha del cálculo de la multa (S/)", "monto": f"S/ {beneficio_ilicito_soles:,.3f}", "ref": None},
             ])
         
         # Se añaden las filas finales que son comunes a ambos casos
         tabla_resumen_filas.extend([
-            {"descripcion": f"UIT al año {fecha_calculo.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": None},
-            {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f}", "ref": None}
+            {"descripcion": f"Unidad Impositiva Tributaria al año {fecha_calculo.year} - UIT {fecha_calculo.year}", "monto": f"S/ {valor_uit:,.2f}", "ref": "d"},
+            {"descripcion": "Beneficio Ilícito (UIT)", "monto": f"{beneficio_ilicito_uit:,.3f} UIT", "ref": None}
         ])
         # --- FIN DE LA MODIFICACIÓN ---
 
@@ -276,7 +290,7 @@ def calcular_beneficio_ilicito(datos_entrada):
             'a': 'ce_anexo',
             'b': 'cok',
             'c': 'periodo_bi',
-            'd': 'bcrp'
+            'd': 'sunat'
         }
 
         # 3. Recolectar datos para formatear las fuentes
