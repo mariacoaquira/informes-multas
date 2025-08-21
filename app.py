@@ -357,70 +357,14 @@ if cliente_gspread:
                     st.write("DEBUG sys.path:", sys.path)
                     st.write("DEBUG current dir:", os.getcwd())
                     st.write("DEBUG archivos infracciones:", glob.glob("infracciones/*.py"))
+                    import traceback
+                    
                     try:
-                        st.write(f"DEBUG: intentando importar infracciones.{id_infraccion}")
+                        id_infraccion = id_infraccion.strip().upper()
                         modulo_especialista = importlib.import_module(f"infracciones.{id_infraccion}")
-                        datos_especificos = modulo_especialista.renderizar_inputs_especificos(i)
-                        st.session_state.imputaciones_data[i].update(datos_especificos)
-                        
-                        # --- INICIO DE LA MODIFICACIÓN ---
-                        
-                        # 1. Validar los datos generales y específicos
-                        datos_generales_ok = st.session_state.imputaciones_data[i].get('texto_hecho') and st.session_state.imputaciones_data[i].get('subtipo_seleccionado')
-                        datos_especificos_ok = modulo_especialista.validar_inputs(st.session_state.imputaciones_data[i])
-                        
-                        # 2. El botón solo se habilita si todo está OK
-                        boton_habilitado = datos_generales_ok and datos_especificos_ok
-                        
-                        st.divider()
-                        if st.button(f"Calcular Hecho {i+1}", key=f"calc_btn_{i}", disabled=(not boton_habilitado)):
-                            
-                        # --- FIN DE LA MODIFICACIÓN ---
-                            with st.spinner(f"Calculando hecho {i+1}..."):
-                                # Cargar DFs y convertirlos a fecha
-                                df_coti_general = cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Cotizaciones_General")
-                                df_indices = cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Indices_BCRP")
-                                if df_indices is not None:
-                                    df_indices['Indice_Mes'] = pd.to_datetime(df_indices['Indice_Mes'], dayfirst=True, errors='coerce')
-                                if df_coti_general is not None:
-                                    df_coti_general['Fecha_Costeo'] = pd.to_datetime(df_coti_general['Fecha_Costeo'], dayfirst=True, errors='coerce')
-                                
-                                # Preparar datos comunes, incluyendo el context_data ya creado
-                                datos_comunes = {
-                                    'df_items_infracciones': cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Items_Infracciones"),
-                                    'df_costos_items': cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Costos_Items"),
-                                    'df_salarios_general': cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "Salarios_General"),
-                                    'df_cos': cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "COS"),
-                                    'df_uit': cargar_hoja_a_df(cliente_gspread, NOMBRE_GSHEET_MAESTRO, "UIT"),
-                                    'df_coti_general': df_coti_general,
-                                    'df_indices': df_indices,
-                                    'df_tipificacion': df_tipificacion,
-                                    'id_infraccion': id_infraccion,
-                                    'rubro': st.session_state.rubro_seleccionado,
-                                    'id_rubro_seleccionado': st.session_state.get('id_rubro_seleccionado'),
-                                    'numero_hecho_actual': i + 1,
-                                    'doc_tpl': DocxTemplate(st.session_state.template_file_buffer),
-                                    'context_data': st.session_state.get('context_data', {})
-                                }
-                                
-                                resultados_completos = modulo_especialista.procesar_infraccion(
-                                    datos_comunes, 
-                                    st.session_state.imputaciones_data[i]
-                                )
-                                # --- INICIO DE LA CORRECCIÓN ---
-                                # Revisa si el especialista reportó un error
-                                if resultados_completos.get('error'):
-                                    st.error(f"Error en el cálculo del Hecho {i+1}: {resultados_completos['error']}")
-                                else:
-                                    # Si no hay error, guarda los resultados y muestra el mensaje de éxito
-                                    st.session_state.imputaciones_data[i]['resultados'] = resultados_completos
-                                    st.success(f"Hecho {i+1} calculado.")
-
-                                    # --- AÑADE ESTA LÍNEA PARA GUARDAR LOS ANEXOS DEL HECHO ---
-                                    st.session_state.imputaciones_data[i]['anexos_ce'] = resultados_completos.get('anexos_ce_generados', [])
-                                # --- FIN DE LA CORRECCIÓN ---
-                    except ImportError:
-                        st.error(f"El módulo para '{id_infraccion}' no está implementado.")
+                    except Exception as e:
+                        st.error(f"Error al importar infracciones.{id_infraccion}: {type(e).__name__} - {e}")
+                        st.code(traceback.format_exc())
 
                 # Sección para mostrar resultados ya calculados
                 if 'resultados' in st.session_state.imputaciones_data[i]:
@@ -751,5 +695,6 @@ if all_steps_complete:
 if not cliente_gspread:
     st.error(
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
+
 
 
