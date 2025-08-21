@@ -2,6 +2,7 @@ import io
 import os  
 import streamlit as st 
 from copy import deepcopy
+from num2words import num2words
 
 # Importaciones de docxcompose
 from docxcompose.composer import Composer
@@ -149,7 +150,7 @@ def create_table_subdoc(doc_template, headers, data, keys):
 
     return sub
 
-def create_main_table_subdoc(doc_template, headers, data, keys):
+def create_main_table_subdoc(doc_template, headers, data, keys, texto_posterior=None, estilo_texto_posterior=None, footnotes_data=None, column_widths=None):
     """
     Crea una tabla con formato y ahora es lo suficientemente inteligente
     para manejar tanto tablas simples como tablas con superíndices.
@@ -158,6 +159,14 @@ def create_main_table_subdoc(doc_template, headers, data, keys):
     table = sub.add_table(rows=1, cols=len(headers))
     table.style = 'TablaCuerpo'
     SHADING_COLOR = "D9D9D9"
+
+        # --- INICIO DE LA MODIFICACIÓN ---
+    # Si se proporcionan anchos de columna, los aplicamos aquí
+    if column_widths:
+        if len(column_widths) == len(headers):
+            for i, width in enumerate(column_widths):
+                table.columns[i].width = Inches(width)
+    # --- FIN DE LA MODIFICACIÓN ---
 
     # --- Formato del Encabezado (sin cambios) ---
     hdr_cells = table.rows[0].cells
@@ -224,10 +233,39 @@ def create_main_table_subdoc(doc_template, headers, data, keys):
 
             if is_last_row:
                 set_cell_shading(row_cells[col_idx], SHADING_COLOR)
-                
+
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Al final de la función, justo antes de devolver el subdocumento,
+    # añadimos el texto si es que se proporcionó.
+    if texto_posterior:
+        sub.add_paragraph(texto_posterior, style=estilo_texto_posterior)
+    
+    # --- INICIO DE LA MODIFICACIÓN ---
+    if footnotes_data:
+        # Extraemos los datos del diccionario
+        footnotes_list = footnotes_data.get('list', [])
+        elaboration_text = footnotes_data.get('elaboration', '')
+        style_name = footnotes_data.get('style', 'FuenteTabla')
+
+        # Añadimos el título "Fuente:" en negrita
+        p_fuente = sub.add_paragraph()
+        run_fuente = p_fuente.add_run("Fuente:")
+        run_fuente.bold = False
+        # Aplicamos el mismo estilo de fuente que el resto del bloque
+        p_fuente.style = style_name
+
+        # Añadimos cada una de las notas de la lista
+        for nota in footnotes_list:
+            sub.add_paragraph(nota, style=style_name)
+
+        # Añadimos el texto de elaboración al final
+        if elaboration_text:
+            sub.add_paragraph(elaboration_text, style=style_name)
+    # --- FIN DE LA MODIFICACIÓN ---
+        
     return sub
 
-def create_summary_table_subdoc(doc_template, headers, data, keys):
+def create_summary_table_subdoc(doc_template, headers, data, keys, texto_posterior=None, column_widths=None):
     """
     Crea la tabla de resumen final de la multa, con celdas combinadas.
     """
@@ -235,6 +273,12 @@ def create_summary_table_subdoc(doc_template, headers, data, keys):
     table = sub.add_table(rows=1, cols=len(headers))
     table.style = 'TablaCuerpo'
     SHADING_COLOR = "D9D9D9"
+
+        # --- AÑADE EL MISMO BLOQUE DE CÓDIGO AQUÍ ---
+    if column_widths:
+        if len(column_widths) == len(headers):
+            for i, width in enumerate(column_widths):
+                table.columns[i].width = Inches(width)
 
     # --- Formato del Encabezado ---
     hdr_cells = table.rows[0].cells
@@ -290,6 +334,15 @@ def create_summary_table_subdoc(doc_template, headers, data, keys):
     # Asegurar que la celda "fantasma" (la segunda) también tenga el fondo gris
     set_cell_shading(total_cells[1], SHADING_COLOR)
 
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Al final de la función, añadimos el texto si se proporcionó.
+    if texto_posterior:
+        # Añadimos un párrafo en blanco para dar espacio
+        p = sub.add_paragraph()
+        run = p.add_run(texto_posterior)
+        p.style = 'FuenteTabla' # Aplicamos el estilo de las fuentes
+    # --- FIN DE LA MODIFICACIÓN ---
+
     return sub
 
 def create_footnotes_subdoc(doc_template, footnotes_list, style_name='FuenteTabla', title_font_size=8):
@@ -305,3 +358,36 @@ def create_footnotes_subdoc(doc_template, footnotes_list, style_name='FuenteTabl
     # --- FIN DE LA MODIFICACIÓN ---
 
     return sub
+
+def texto_con_numero(numero, genero='m'):
+    """
+    Formatea un número. Si es entero, lo devuelve como 'texto (número)'.
+    Si tiene decimales, devuelve solo el número formateado hasta 3 decimales.
+    """
+    if numero is None:
+        return "(N/A)"
+
+    # --- INICIO DE LA MODIFICACIÓN ---
+    # Comprobamos si el número puede ser tratado como un entero (ej: 15.0 o 15)
+    if numero == int(numero):
+        # --- LÓGICA PARA NÚMEROS ENTEROS ---
+        num_entero = int(numero)
+        
+        # Convertir a texto
+        texto_num = num2words(num_entero, lang='es')
+        
+        # Casos especiales para el número 1
+        if num_entero == 1:
+            if genero == 'm':
+                texto_num = "un"
+            elif genero == 'f':
+                texto_num = "una"
+        
+        return f"{texto_num} ({num_entero})"
+        
+    else:
+        # --- LÓGICA PARA NÚMEROS CON DECIMALES ---
+        # Redondea a 3 decimales y elimina los ceros sobrantes al final
+        num_str = f"{numero:.3f}".rstrip('0').rstrip('.')
+        return num_str
+    # --- FIN DE LA MODIFICACIÓN ---
