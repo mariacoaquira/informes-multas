@@ -549,7 +549,18 @@ if all_steps_complete:
 
                     # Aseguramos que el total final también se formatee correctamente
                     summary_rows.append({'numeral': 'Total', 'infraccion': '', 'multa': f"{multa_total_uit:,.3f} UIT"})
-                    sub_resumen_final = create_summary_table_subdoc(doc_maestra, ["Numeral", "Infracciones", "Multa"], summary_rows, ['numeral', 'infraccion', 'multa'])
+                    # Define el texto de elaboración
+                    texto_elaboracion = "Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI."
+                    anchos_para_resumen = (1, 4, 1.5) # 1" para Numeral, 4" para Infracciones, 1.5" para Multa
+                    # Pasa el texto al crear la tabla de resumen
+                    sub_resumen_final = create_summary_table_subdoc(
+                        doc_maestra, 
+                        ["Numeral", "Infracciones", "Multa"], 
+                        summary_rows, 
+                        ['numeral', 'infraccion', 'multa'],
+                        texto_posterior=texto_elaboracion,
+                        column_widths=anchos_para_resumen # <-- Aquí pasas los anchos
+                    )
                     
                     # Construcción final del diccionario 'contexto_maestro'
                     contexto_maestro = {
@@ -745,7 +756,3 @@ if all_steps_complete:
 if not cliente_gspread:
     st.error(
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
-
-
-
-
