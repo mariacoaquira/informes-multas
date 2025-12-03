@@ -88,7 +88,7 @@ def cargar_hoja_a_df(_client, nombre_archivo, nombre_hoja):
         encabezados = todos_los_valores[0]
         datos = todos_los_valores[1:]
 
-        df = pd.DataFreame(datos, columns=encabezados)
+        df = pd.DataFrame(datos, columns=encabezados)
 
         df = df.replace(['', 'None'], None)
         return df
@@ -554,3 +554,4 @@ def cargar_datos_caso(cliente, expediente):
 
 
 # --- FIN: NUEVAS FUNCIONES DE MEMORIA DE CASOS ---
+
