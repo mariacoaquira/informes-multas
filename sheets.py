@@ -80,9 +80,19 @@ def cargar_hoja_a_df(_client, nombre_archivo, nombre_hoja):
         return None
     try:
         sheet = _client.open(nombre_archivo).worksheet(nombre_hoja)
-        datos = sheet.get_all_records()
-        df = pd.DataFrame(datos).replace(['', 'None'], None)
+        todos_los_valores = sheet.get_all_values()
+
+        if not todos_los_valores:
+            return None
+
+        encabezados = todos_los_valores[0]
+        datos = todos_los_valores[1:]
+
+        df = pd.DataFreame(datos, columns=encabezados)
+
+        df = df.replace(['', 'None'], None)
         return df
+
     except gspread.exceptions.WorksheetNotFound:
         return None
     except Exception as e:
@@ -541,5 +551,6 @@ def cargar_datos_caso(cliente, expediente):
         import traceback
         traceback.print_exc()
         return None, f"Error al cargar/procesar datos: {e}"
+
 
 # --- FIN: NUEVAS FUNCIONES DE MEMORIA DE CASOS ---
