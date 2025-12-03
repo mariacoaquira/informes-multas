@@ -16,8 +16,8 @@ from num2words import num2words
 import base64  # <--- Add this
 import tempfile # <--- Add this
 import os       # <--- Add this
-from docx2pdf import convert
-import pythoncom
+#from docx2pdf import convert
+#import pythoncom
 import requests # <--- AÑADIR
 import traceback # <--- AÑADIR
 from jinja2 import Environment
@@ -2883,4 +2883,5 @@ if cliente_gspread:
 
 if not cliente_gspread:
     st.error(
+
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
