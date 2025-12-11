@@ -12,7 +12,7 @@ import io
 import math
 
 # ---------------------------------------------------------------------
-# FUNCIÓN 1: RENDERIZAR INTERFAZ DE USUARIO (CORREGIDO CON RD1 y RD2)
+# FUNCIÓN 1: RENDERIZAR INTERFAZ DE USUARIO
 # ---------------------------------------------------------------------
 def renderizar_inputs_coercitiva(datos_informe):
     """ Renderiza la interfaz para multa coercitiva, centrada en medidas y resoluciones específicas. """
@@ -27,6 +27,24 @@ def renderizar_inputs_coercitiva(datos_informe):
         datos_informe['numero_rd1'] = st.text_input("N.° Resolución Directoral (RD1)", value=datos_informe.get('numero_rd1', ''))
     with col_rd2: 
         datos_informe['fecha_rd1'] = st.date_input("Fecha de notificación de RD1", value=datos_informe.get('fecha_rd1'), format="DD/MM/YYYY")
+    
+    # --- INICIO CORRECCIÓN: Ambos artículos en RD1 ---
+    col_art1, col_art2 = st.columns(2)
+    with col_art1:
+        datos_informe['articulo_resp_rd1'] = st.text_input(
+            "Artículo que declara la responsabilidad/incumplimiento", 
+            value=datos_informe.get('articulo_resp_rd1', ''), 
+            help="Ej: Artículo 1° (donde se dice que el administrado es responsable).",
+            placeholder="Ej: Artículo 1°"
+        )
+    with col_art2:
+        datos_informe['articulo_medida_rd1'] = st.text_input(
+            "Artículo que ordena la medida correctiva", 
+            value=datos_informe.get('articulo_medida_rd1', ''), 
+            help="Ej: Artículo 2° (donde se dicta la medida).",
+            placeholder="Ej: Artículo 2°"
+        )
+    # --- FIN CORRECCIÓN ---
     
     col_rd3, col_rd4, col_rd5 = st.columns(3)
     with col_rd3:
@@ -46,6 +64,9 @@ def renderizar_inputs_coercitiva(datos_informe):
         datos_informe['numero_rd2'] = st.text_input("N.° Resolución (RD2)", value=datos_informe.get('numero_rd2', ''))
     with col_rd2_2: 
         datos_informe['fecha_rd2'] = st.date_input("Fecha de notificación de RD2", value=datos_informe.get('fecha_rd2'), format="DD/MM/YYYY")
+    
+    # --- NUEVO: Artículo de Incumplimiento ---
+    datos_informe['articulo_rd2'] = st.text_input("Artículo que declara el incumplimiento (ej: Artículo 1°)", value=datos_informe.get('articulo_rd2', 'Artículo X°'), help="Se usará para indicar dónde se declaró el incumplimiento.")
     st.divider()
 
     # --- SECCIÓN C: MEDIDAS CORRECTIVAS INCUMPLIDAS ---
@@ -54,7 +75,7 @@ def renderizar_inputs_coercitiva(datos_informe):
     
     if 'medidas_incumplidas' not in datos_informe:
         datos_informe['medidas_incumplidas'] = [
-            {'num_medida': '1', 'desc_medida': '', 'obligacion': '', 'hechos_asociados': [
+            {'num_medida': '1', 'desc_medida': '', 'hechos_asociados': [
                 {'num_hecho': '1', 'desc_hecho': '', 'multa_uit_rd': 0.0}
             ]}
         ]
@@ -62,7 +83,7 @@ def renderizar_inputs_coercitiva(datos_informe):
     if st.button("➕ Añadir Medida Correctiva"):
         next_num = len(datos_informe['medidas_incumplidas']) + 1
         datos_informe['medidas_incumplidas'].append(
-            {'num_medida': str(next_num), 'desc_medida': '', 'obligacion': '', 'hechos_asociados': [
+            {'num_medida': str(next_num), 'desc_medida': '', 'hechos_asociados': [
                 {'num_hecho': '1', 'desc_hecho': '', 'multa_uit_rd': 0.0}
             ]}
         )
@@ -72,12 +93,10 @@ def renderizar_inputs_coercitiva(datos_informe):
         with st.container(border=True):
             st.markdown(f"#### Medida Correctiva N° {i+1}")
             
-            # --- INICIO CAMBIO PUNTUAL ---
             col_m1, col_m2 = st.columns([1, 4])
             with col_m1: 
                 medida['num_medida'] = st.text_input("N°/ID", value=medida.get('num_medida', str(i+1)), key=f"med_num_{i}")
             with col_m2: 
-                # Usamos 'desc_medida' como el campo principal para toda la descripción/obligación
                 medida['desc_medida'] = st.text_area(
                     "Medida Correctiva (Descripción y Obligación)", 
                     value=medida.get('desc_medida', ''), 
@@ -85,10 +104,8 @@ def renderizar_inputs_coercitiva(datos_informe):
                     height=100, 
                     placeholder="Ingrese la descripción completa de la medida..."
                 )
-                # Eliminamos el input separado de 'obligacion'
-            # --- FIN CAMBIO PUNTUAL ---
 
-            st.markdown("**Conductas Infractoras (Hechos) Vinculadas:**")
+            st.caption("Conductas Infractoras (Hechos) Vinculadas:")
             
             for j, hecho in enumerate(medida['hechos_asociados']):
                 with st.container():
@@ -169,7 +186,7 @@ def renderizar_inputs_coercitiva(datos_informe):
     return datos_informe
 
 # ---------------------------------------------------------------------
-# FUNCIÓN 2: VALIDACIÓN (CORREGIDA CON RD1 Y RD2)
+# FUNCIÓN 2: VALIDACIÓN
 # ---------------------------------------------------------------------
 def validar_inputs_coercitiva(datos_informe):
     # 1. Validar RD1
@@ -215,7 +232,7 @@ def _buscar_en_cuadro(multa_base_uit, cuadro_df):
 # FUNCIÓN AUXILIAR GLOBAL: FORMATO DE HECHOS
 # ---------------------------------------------------------------------
 def fmt_hechos(lista_numeros):
-    """Helper para formatear listas de hechos."""
+    """Helper para formatear listas de hechos (n.° 1, n.° 2...)."""
     if not lista_numeros: return ""
     lista_fmt = [f"n.° {n}" for n in lista_numeros]
     if len(lista_fmt) == 1: return lista_fmt[0]
@@ -223,7 +240,7 @@ def fmt_hechos(lista_numeros):
     return ", ".join(lista_fmt[:-1]) + " y " + lista_fmt[-1]
 
 # ---------------------------------------------------------------------
-# FUNCIÓN AUXILIAR: PLACEHOLDERS GRAMATICALES
+# FUNCIÓN AUXILIAR: PLACEHOLDERS GRAMATICALES (GLOBALES)
 # ---------------------------------------------------------------------
 def _generar_placeholders_gramaticales(num_coercitiva, medidas_incumplidas, todos_hechos_unicos):
     num_medidas = len(medidas_incumplidas)
@@ -240,7 +257,7 @@ def _generar_placeholders_gramaticales(num_coercitiva, medidas_incumplidas, todo
         ord_txt = ordinales_pl.get(num_coercitiva, f"{num_coercitiva}as")
         placeholders['ph_primera_multa'] = f"las {ord_txt} multas coercitivas"
 
-    # 2. Detalle medidas hechos
+    # 2. Detalle medidas hechos (Complejo)
     lista_descripciones = []
     for medida in medidas_incumplidas:
         hechos_medida = [h.get('num_hecho') for h in medida.get('hechos_asociados', [])]
@@ -298,10 +315,8 @@ def procesar_coercitiva(datos_comunes, datos_informe):
             desc_med = medida_input.get('desc_medida', '')
             if not num_med: continue
             
-            # --- CAMBIO: La obligación ahora es la misma descripción ---
-            # Al haber unificado el input, usamos desc_med como la obligación para la Tabla 6
+            # La obligación es la descripción completa
             obligacion = desc_med 
-            # -----------------------------------------------------------
 
             multa_base_para_esta_medida = 0.0
             hechos_originales_para_medida = []
@@ -359,12 +374,34 @@ def procesar_coercitiva(datos_comunes, datos_informe):
             if total_medidas_a_procesar == 1: label_medida_dinamica = "Única medida correctiva"
             else: label_medida_dinamica = f"Medida correctiva n.° {num_med}"
 
+            # --- PREPARACIÓN DE DATOS PARA EL BUCLE EN PLANTILLA ---
+            
+            # 1. Req 2: Lista de conductas ("conducta infractora n. 1" / "conductas n. 1 y 2")
+            numeros_hechos_medida = [h.get('num_hecho') for h in data.get('hechos', [])]
+            lista_hechos_simple = fmt_hechos(numeros_hechos_medida) # "n. 1"
+            
+            prefix_conducta_loop = "conducta infractora" if len(numeros_hechos_medida) == 1 else "conductas infractoras"
+            hechos_lista_str = f"{prefix_conducta_loop} {lista_hechos_simple}" # "conducta infractora n. 1"
+            
+            # 3. Req 3: Monto total multas base con formato
+            multa_base_str = f"{multa_base:,.3f} UIT"
+            
+            # 4. Req 4: La/Las conducta(s) (Label)
+            ph_conducta_label = "La conducta infractora" if len(numeros_hechos_medida) == 1 else "Las conductas infractoras"
+
             resultados_medidas.append({
                 'num_medida': num_med, 
                 'desc_medida': data.get('desc_medida', ''), 
                 'label_medida': label_medida_dinamica,
                 'obligacion': data.get('obligacion', ''),
                 'hechos': data.get('hechos', []), 
+                
+                # --- NUEVOS PLACEHOLDERS PARA EL BUCLE ---
+                'hechos_lista_str': hechos_lista_str,       # Req 2
+                'multa_base_formato': multa_base_str,       # Req 3
+                'ph_conducta_label': ph_conducta_label,     # Req 4
+                # -----------------------------------------
+                
                 'multa_base_uit': multa_base, 
                 'num_coercitiva_texto': num_coercitiva_texto, 
                 'multa_coercitiva_final_uit': multa_coercitiva_final
@@ -380,35 +417,22 @@ def procesar_coercitiva(datos_comunes, datos_informe):
 
         # 5. Preparar Tablas
         contexto_modificado = datos_comunes.get('context_data', {}).copy()
-        df_subdirecciones = cargar_hoja_a_df(cliente_gs, nombre_gsheet, "Subdirecciones")
-        if df_subdirecciones is not None:
-            dfai_row = df_subdirecciones[df_subdirecciones['ID_Subdireccion'] == 'DFAI']
-            if not dfai_row.empty:
-                contexto_modificado['nombre_encargado_sub1'] = dfai_row.iloc[0].get('Encargado_Sub', '')
-                contexto_modificado['cargo_encargado_sub1'] = dfai_row.iloc[0].get('Cargo_Encargado_Sub', '')
-                contexto_modificado['titulo_encargado_sub1'] = dfai_row.iloc[0].get('Titulo_Encargado_Sub', '')
-                contexto_modificado['subdireccion'] = dfai_row.iloc[0].get('Subdireccion', 'Dirección de Fiscalización y Aplicación de Incentivos')
         
-        # Tabla 4 (Req): N°, Conducta, Medida
         datos_t4 = [{'n': x['num_hecho'], 'hecho': x['desc_hecho'], 'medida': f"Medida N° {x['num_medida']}: {x['desc_medida']}"} for x in hechos_rd_flat_list]
         t4_subdoc = create_main_table_coercitiva(doc_tpl, ["N°", "Conducta Infractora", "Medida Correctiva"], datos_t4, ['n', 'hecho', 'medida'], column_widths=(0.5, 3, 3))
         
-        # Tabla 5 (Req): Conducta, Multa Final (Total)
         datos_t5 = [{'hecho': f"Hecho N° {x['num_hecho']}: {x['desc_hecho']}", 'multa': f"{x['multa_uit_rd']:,.3f} UIT"} for x in hechos_rd_flat_list]
         datos_t5.append({'hecho': 'Total', 'multa': f"{multa_total_rd_uit:,.3f} UIT"})
         t5_subdoc = create_main_table_coercitiva(doc_tpl, ["Conducta Infractora", "Multa Final"], datos_t5, ['hecho', 'multa'], column_widths=(5, 1.5))
         
-        # Tabla 6 (Req): N° Conducta, Obligación
         datos_t6 = []
         for num_med, data in medidas_agrupadas.items():
-            # AQUÍ USAMOS LA NUEVA VARIABLE 'obligacion' QUE CONTIENE LA DESCRIPCIÓN
             oblig = data.get('obligacion', '')
             for h in data.get('hechos', []):
                 texto_obl = f"{oblig}\n\n(Multa Base asociada: {float(h.get('multa_uit_rd', 0)):,.3f} UIT)"
                 datos_t6.append({'n': h['num_hecho'], 'obl': texto_obl})
         t6_subdoc = create_main_table_coercitiva(doc_tpl, ["N° Conducta", "Obligación de la Medida"], datos_t6, ['n', 'obl'], column_widths=(1, 5.5))
         
-        # Tabla 7 (Req): N°, Medida, Monto Coercitiva (Total - Usando Summary Table)
         datos_t7 = [{'Numeral': x['num_medida'], 'Medida': x['desc_medida'], 'Monto': f"{x['multa_coercitiva_final_uit']:,.3f} UIT"} for x in resultados_medidas]
         datos_t7.append({'Numeral': '', 'Medida': 'Total', 'Monto': f"{multa_coercitiva_total_uit:,.3f} UIT"})
         t7_subdoc = create_summary_table_subdoc(doc_tpl, ["N°", "Medida Correctiva", "Monto Multa Coercitiva"], datos_t7, ['Numeral', 'Medida', 'Monto'], column_widths=(0.5, 4, 2))
@@ -416,13 +440,44 @@ def procesar_coercitiva(datos_comunes, datos_informe):
         # 6. Contexto final
         placeholders_gramaticales = _generar_placeholders_gramaticales(datos_informe.get('num_coercitiva', 1), datos_informe.get('medidas_incumplidas', []), todos_hechos_unicos)
         
+        # --- PREPARAR TEXTO PARA REQ 1 (Cantidad de infracciones) ---
+        num_hechos_rd1 = datos_informe.get('num_hechos_rd1', 0)
+        texto_num_infracciones = texto_con_numero(num_hechos_rd1, genero='f') # "una", "dos"
+        suffix_infracciones = "infracción" if num_hechos_rd1 == 1 else "infracciones"
+        ph_cantidad_infracciones_total = f"{texto_num_infracciones} ({num_hechos_rd1}) {suffix_infracciones}"
+        
+        # --- INICIO: Promover datos de la primera medida al contexto global ---
+        # Esto permite usar {{ hechos_lista_str }} directamente si solo hay una medida
+        datos_medida_principal = {}
+        if resultados_medidas:
+            # Tomamos la primera medida como referencia para los placeholders globales
+            medida_p = resultados_medidas[0] 
+            datos_medida_principal = {
+                'hechos_lista_str_global': medida_p['hechos_lista_str'],
+                'multa_base_formato_global': medida_p['multa_base_formato'],
+                'ph_conducta_label_global': medida_p['ph_conducta_label'],
+                'desc_medida_global': medida_p['desc_medida'],
+                'obligacion_global': medida_p['obligacion']
+            }
+        # --- FIN ---
+
         contexto_final = {
             **contexto_modificado, 
             **placeholders_gramaticales, 
+            # --- AÑADIR ESTA LÍNEA ---
+            **datos_medida_principal, 
+            # -------------------------
             'numero_coercitiva_titulo': titulo_coercitiva,
             'numero_rd1': datos_informe.get('numero_rd1'),
             'fecha_rd1': format_date(datos_informe.get('fecha_rd1'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_informe.get('fecha_rd1') else '',
+            # --- NUEVO: Req 6 Artículos ---
+            'articulo_rd1': datos_informe.get('articulo_rd1', ''),
+            'articulo_rd2': datos_informe.get('articulo_rd2', ''),
+            
             'num_hechos_rd1': datos_informe.get('num_hechos_rd1'),
+            # --- NUEVO: Req 1 Infracciones Totales ---
+            'ph_cantidad_infracciones_total': ph_cantidad_infracciones_total, 
+            
             'multa_total_rd1': f"{datos_informe.get('multa_total_rd1'):,.3f}",
             'num_medidas_rd1': datos_informe.get('num_medidas_rd1'),
             'numero_rd2': datos_informe.get('numero_rd2'),
@@ -430,22 +485,21 @@ def procesar_coercitiva(datos_comunes, datos_informe):
             
             'multa_base_calculada': f"{multa_total_rd_uit:,.3f}", 
             'multa_base_calculada_uit': f"{multa_total_rd_uit:,.3f} UIT",
-            'multa_coercitiva_total': f"{multa_coercitiva_total_uit:,.3f}",
+            'multa_coercitiva_total': f"{multa_coercitiva_total_uit:,.3f}", 
             'multa_coercitiva_total_uit': f"{multa_coercitiva_total_uit:,.3f} UIT",
             
             'es_metodologia_nueva': (datos_informe.get('num_coercitiva') == 1 and datos_informe.get('metodologia') == 'Nueva'),
             
             'lista_medidas_calculadas': resultados_medidas,
             
-            'tabla_hecho_medida': t4_subdoc,
-            'tabla_hecho_multa': t5_subdoc,
-            'tabla_hecho_obligacion': t6_subdoc,
+            'tabla_hecho_medida': t4_subdoc, 
+            'tabla_hecho_multa': t5_subdoc, 
+            'tabla_hecho_obligacion': t6_subdoc, 
             'tabla_medida_coercitiva': t7_subdoc,
         }
 
         doc_tpl.render(contexto_final, autoescape=True)
-        buffer_final_word = io.BytesIO()
-        doc_tpl.save(buffer_final_word)
+        buffer_final_word = io.BytesIO(); doc_tpl.save(buffer_final_word)
         
         return {'doc_pre_compuesto': buffer_final_word, 'resultados_para_app': {'tabla_resumen_coercitivas': resultados_medidas, 'total_uit': multa_coercitiva_total_uit}}
 
