@@ -75,28 +75,50 @@ def conectar_gsheet():
 
 @st.cache_data(show_spinner="Cargando datos de la hoja...")
 def cargar_hoja_a_df(_client, nombre_archivo, nombre_hoja):
-    """Carga una hoja de Google Sheets en un DataFrame de Pandas."""
-    if not _client:
-        return None
+    """
+    Carga una hoja en DF y AUTO-CONVIERTE números y fechas.
+    Evita el problema de que todo sea texto.
+    """
+    if not _client: return None
     try:
         sheet = _client.open(nombre_archivo).worksheet(nombre_hoja)
         todos_los_valores = sheet.get_all_values()
-
-        if not todos_los_valores:
-            return None
-
+        
+        if not todos_los_valores: return None
+            
         encabezados = todos_los_valores[0]
         datos = todos_los_valores[1:]
-
+        
         df = pd.DataFrame(datos, columns=encabezados)
+        
+        # --- LIMPIEZA AUTOMÁTICA DE TIPOS ---
+        for col in df.columns:
+            # 1. Intentar convertir a NÚMERO
+            # Esto convierte "123.45" a 123.45 (float)
+            try:
+                # errors='ignore' significa: si encuentra texto real (ej: "S/"), no lo rompe, lo deja como texto.
+                # Si toda la columna parece número, la convierte.
+                df[col] = pd.to_numeric(df[col], errors='ignore')
+            except:
+                pass
 
-        df = df.replace(['', 'None'], None)
+            # 2. Intentar convertir a FECHA (Heurística simple)
+            # Solo si la columna tiene "Fecha", "Mes" o "Dia" en el nombre y es texto
+            if df[col].dtype == 'object' and any(x in col for x in ['Fecha', 'Mes', 'Dia', 'Date']):
+                try:
+                    df[col] = pd.to_datetime(df[col], dayfirst=True, errors='coerce')
+                except:
+                    pass
+        
+        # Reemplazar valores vacíos o nulos por None real
+        df = df.replace(['', 'None', 'nan', pd.NA], None)
+        
         return df
 
     except gspread.exceptions.WorksheetNotFound:
         return None
     except Exception as e:
-        st.error(f"No se pudo cargar la hoja '{nombre_hoja}'. Error: {e}")
+        st.error(f"Error cargando '{nombre_hoja}': {e}")
         return None
 
 def convertir_porcentaje(valor_str):
@@ -552,6 +574,4 @@ def cargar_datos_caso(cliente, expediente):
         traceback.print_exc()
         return None, f"Error al cargar/procesar datos: {e}"
 
-
 # --- FIN: NUEVAS FUNCIONES DE MEMORIA DE CASOS ---
-
