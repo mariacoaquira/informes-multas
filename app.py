@@ -16,8 +16,8 @@ from num2words import num2words
 import base64  # <--- Add this
 import tempfile # <--- Add this
 import os       # <--- Add this
-#from docx2pdf import convert
-#import pythoncom
+from docx2pdf import convert
+import pythoncom
 import requests # <--- AÑADIR
 import traceback # <--- AÑADIR
 from jinja2 import Environment
@@ -495,14 +495,72 @@ if cliente_gspread:
             )
         # --- FIN: (REQ 1) CORRECCIÓN RSD v2 ---
 
+        # --- INICIO: SECCIÓN EXCLUSIVA PARA RD (IFI + INFORME MULTA) ---
+        producto_caso = st.session_state.info_expediente.get('PRODUCTO', '')
+        
+        if producto_caso == 'RD':
+            st.divider()
+            st.subheader("Antecedentes: Informe Final de Instrucción (IFI)")
+            
+            # 1. Datos Básicos del IFI
+            col_ifi1, col_ifi2 = st.columns(2)
+            with col_ifi1:
+                st.session_state.numero_ifi = st.text_input(
+                    "N.º del IFI", 
+                    value=st.session_state.get('numero_ifi', ''),
+                    placeholder="Ej: 00123-2023-OEFA/DFAI-SFEM"
+                )
+            with col_ifi2:
+                st.session_state.fecha_ifi = st.date_input(
+                    "Fecha de notificación del IFI", 
+                    value=st.session_state.get('fecha_ifi'),
+                    format="DD/MM/YYYY",
+                    key="input_fecha_ifi"
+                )
+            
+            # 2. Cuadro del Informe de Multa (Antecedente)
+            with st.container(border=True):
+                st.markdown("###### Datos del Informe de Multa (Etapa Instructora)")
+                st.caption("Datos del cálculo realizado previamente en el IFI.")
+                
+                col_im1, col_im2, col_im3 = st.columns(3)
+                with col_im1:
+                    st.session_state.num_informe_multa_ifi = st.text_input(
+                        "N.º Informe de Multa", 
+                        value=st.session_state.get('num_informe_multa_ifi', ''),
+                        placeholder="Ej: 0045-2023..."
+                    )
+                with col_im2:
+                    st.session_state.monto_multa_ifi = st.number_input(
+                        "Monto Total Propuesto (UIT)", 
+                        value=st.session_state.get('monto_multa_ifi', 0.0),
+                        format="%.3f",
+                        min_value=0.0
+                    )
+                with col_im3:
+                    st.session_state.num_imputaciones_ifi = st.number_input(
+                        "N.º Imputaciones (IFI)", 
+                        value=st.session_state.get('num_imputaciones_ifi', 1), 
+                        step=1,
+                        min_value=1
+                    )
+        # --- FIN: SECCIÓN RD ---
+
         resolucion_ok = False
 
         if st.session_state.get('info_expediente'):
             producto_caso = st.session_state.info_expediente.get('PRODUCTO', '')
+            
             if producto_caso == 'RD':
-                if st.session_state.get('numero_ifi') and st.session_state.get('fecha_ifi'):
+                # Para RD exigimos IFI y RSD (o solo IFI, depende de tu proceso). 
+                # Aquí exijo ambos para estar seguros.
+                if (st.session_state.get('numero_rsd') and 
+                    st.session_state.get('fecha_rsd') and 
+                    st.session_state.get('numero_ifi') and 
+                    st.session_state.get('fecha_ifi')):
                     resolucion_ok = True
             else:
+                # Para IFI/COERCITIVA solo RSD (o lo que corresponda)
                 if st.session_state.get('numero_rsd') and st.session_state.get('fecha_rsd'):
                     resolucion_ok = True
 
@@ -587,7 +645,14 @@ if cliente_gspread:
                 context_data.update({
                     'expediente': st.session_state.get('num_expediente_formateado', ''),
                     'ht': info_caso.get('HT', ''),
-                    'numero_rsd': st.session_state.get('numero_rsd', '')
+                    'numero_rsd': st.session_state.get('numero_rsd', ''),
+                    'numero_ifi': st.session_state.get('numero_ifi', ''),
+                    'fecha_ifi': format_date(st.session_state.get('fecha_ifi'), "d 'de' MMMM 'de' yyyy", locale='es') if st.session_state.get('fecha_ifi') else '',
+                    
+                    # Datos del Informe de Multa previo
+                    'num_informe_multa_ifi': st.session_state.get('num_informe_multa_ifi', ''),
+                    'monto_multa_ifi': f"{st.session_state.get('monto_multa_ifi', 0.0):,.3f} UIT",
+                    'num_imputaciones_ifi': st.session_state.get('num_imputaciones_ifi', 0)
                 })
                 # Lógica para obtener datos de la subdirección y SSAG
                 id_sub_row = df_sector_sub[df_sector_sub['Sector_Rubro'] == st.session_state.rubro_seleccionado]
@@ -2883,5 +2948,4 @@ if cliente_gspread:
 
 if not cliente_gspread:
     st.error(
-
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
