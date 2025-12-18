@@ -180,8 +180,11 @@ def calcular_beneficio_ilicito_extemporaneo(datos_entrada):
         fuente_cos = datos_entrada.get('fuente_cos', '')
         ce = ce_soles if moneda_cos == 'S/' else ce_dolares
         fecha_hoy = datos_entrada.get('fecha_emision_informe', date.today()) # <-- CAMBIO
-        diff_cap = relativedelta(fecha_cumplimiento_extemporaneo, fecha_incumplimiento_calc)
-        t_cap = (diff_cap.years * 12 + diff_cap.months) + redondeo_excel(diff_cap.days / 30.0, 3)
+        
+        # diff_cap = relativedelta(fecha_cumplimiento_extemporaneo, fecha_incumplimiento_calc)
+        # t_cap = (diff_cap.years * 12 + diff_cap.months) + redondeo_excel(diff_cap.days / 30.0, 3)
+        
+        t_cap = calcular_tiempo_meses_excel_bug(fecha_incumplimiento_calc, fecha_cumplimiento_extemporaneo)
         ce_ajustado_cap = redondeo_excel(ce * ((1 + cos_mensual) ** t_cap), 3)
         
         end_date_tc = pd.to_datetime(fecha_cumplimiento_extemporaneo)
@@ -300,9 +303,10 @@ def calcular_beneficio_ilicito(datos_entrada):
         cos_mensual = convertir_porcentaje(cos_info.iloc[0]['COS_Mensual'])
         ce = ce_soles if moneda_cos == 'S/' else ce_dolares
         
-        diff = relativedelta(fecha_calculo, fecha_incumplimiento_calc)
-        t_meses_decimal = (diff.years * 12 + diff.months) + redondeo_excel(diff.days / 30.0, 3)
+        # diff = relativedelta(fecha_calculo, fecha_incumplimiento_calc)
+        # t_meses_decimal = (diff.years * 12 + diff.months) + redondeo_excel(diff.days / 30.0, 3)
         
+        t_meses_decimal = calcular_tiempo_meses_excel_bug(fecha_incumplimiento_calc, fecha_calculo)
         ce_ajustado = redondeo_excel(ce * ((1 + cos_mensual) ** t_meses_decimal), 3)
 
         # --- INICIO: CORRECCIÓN TC PROMEDIO 12 MESES ---
@@ -575,3 +579,51 @@ def cargar_datos_caso(cliente, expediente):
         return None, f"Error al cargar/procesar datos: {e}"
 
 # --- FIN: NUEVAS FUNCIONES DE MEMORIA DE CASOS ---
+
+# --------------------------------------------------------------------
+#  NUEVA FUNCIÓN AUXILIAR: SIMULACIÓN EXCEL
+# --------------------------------------------------------------------
+from datetime import timedelta # Asegúrate de que esto esté importado arriba
+
+def calcular_tiempo_meses_excel_bug(fecha_inicio, fecha_fin):
+    """
+    Calcula el tiempo 'T' imitando el error conocido de Excel en la fórmula 
+    SIFECHA(..., "md") cuando el día de inicio es 31 y el mes anterior al cierre 
+    tiene menos de 31 días.
+    """
+    # 1. Calcular meses completos (Excel hace esto bien)
+    meses_totales = (fecha_fin.year - fecha_inicio.year) * 12 + (fecha_fin.month - fecha_inicio.month)
+    
+    # Ajuste si el día de fin es menor al día de inicio (aún no se cierra el mes)
+    if fecha_fin.day < fecha_inicio.day:
+        meses_totales -= 1
+    
+    # 2. Calcular días sobrantes con el "Bug" de desbordamiento
+    dia_inicio = fecha_inicio.day
+    
+    # Determinar el mes/año base para la resta de días
+    if fecha_fin.day >= dia_inicio:
+        anio_base = fecha_fin.year
+        mes_base = fecha_fin.month
+    else:
+        # Retroceder un mes
+        if fecha_fin.month == 1:
+            anio_base = fecha_fin.year - 1
+            mes_base = 12
+        else:
+            anio_base = fecha_fin.year
+            mes_base = fecha_fin.month - 1
+            
+    # SIMULACIÓN DEL ERROR:
+    # Creamos la fecha base empezando el día 1 y sumando los días.
+    # Si dia_inicio es 31 y el mes_base tiene 30 días (ej. Junio),
+    # fecha_virtual será el 1 de Julio (desbordamiento), perdiendo un día en el conteo.
+    fecha_base_dia_1 = date(anio_base, mes_base, 1)
+    fecha_virtual_excel = fecha_base_dia_1 + timedelta(days=(dia_inicio - 1))
+    
+    dias_sobrantes = (fecha_fin - fecha_virtual_excel).days
+    
+    # 3. Sumar fracción
+    t_total = meses_totales + redondeo_excel(dias_sobrantes / 30.0, 3)
+    
+    return t_total
