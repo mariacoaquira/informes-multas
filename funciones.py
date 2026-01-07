@@ -42,6 +42,81 @@ from docx.enum.style import WD_STYLE_TYPE
 #  FUNCIONES DE WORD
 # --------------------------------------------------------------------
 
+from docx.shared import Inches, Pt
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+def create_graduation_table_subdoc(tpl, headers, data, keys, texto_posterior="", column_widths=(5.7, 0.5)):
+    sd = tpl.new_subdoc()
+    table = sd.add_table(rows=1, cols=len(headers))
+    table.style = 'TablaCuerpo' 
+
+    # 1. Configurar anchos (Calificación más estrecha: 0.5)
+    for i, width in enumerate(column_widths):
+        table.columns[i].width = Inches(width)
+
+    # Cabecera
+    hdr_cells = table.rows[0].cells
+    for i, header in enumerate(headers):
+        hdr_cells[i].text = header
+        p = hdr_cells[i].paragraphs[0]
+        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        
+        # 3. Fuente Arial 10 Bold en cabecera
+        run = p.runs[0]
+        run.font.name = 'Arial'
+        run.font.size = Pt(10)
+        run.bold = True
+        
+        shading_elm = OxmlElement('w:shd')
+        shading_elm.set(qn('w:fill'), 'D9D9D9')
+        hdr_cells[i]._tc.get_or_add_tcPr().append(shading_elm)
+
+    # Datos
+    for i, item in enumerate(data):
+        row = table.add_row()
+        for j, key in enumerate(keys):
+            cell = row.cells[j]
+            cell.text = str(item.get(key, ""))
+            p = cell.paragraphs[0]
+            
+            # 3. Forzar Fuente Arial 10 en celdas
+            if p.runs:
+                run = p.runs[0]
+                run.font.name = 'Arial'
+                run.font.size = Pt(10)
+            
+            if j == 1:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            
+            # Lógica de bordes (f1-f7)
+            if i < 7:
+                tcPr = cell._tc.get_or_add_tcPr()
+                tcBorders = OxmlElement('w:tcBorders')
+                if i < 6:
+                    bottom = OxmlElement('w:bottom')
+                    bottom.set(qn('w:val'), 'nil')
+                    tcBorders.append(bottom)
+                if i > 0:
+                    top = OxmlElement('w:top')
+                    top.set(qn('w:val'), 'nil')
+                    tcBorders.append(top)
+                tcPr.append(tcBorders)
+
+            if i >= 7: # Totales en negrita y fondo
+                if p.runs: p.runs[0].bold = True
+                shading_elm = OxmlElement('w:shd')
+                shading_elm.set(qn('w:fill'), 'D9D9D9')
+                cell._tc.get_or_add_tcPr().append(shading_elm)
+
+    # 4. Texto posterior con estilo configurado (Arial 8)
+    if texto_posterior:
+        p = sd.add_paragraph(texto_posterior)
+        p.style = 'FuenteTabla'  
+
+    return sd
+
 def create_capacitacion_table_subdoc(doc_template, headers, data, keys, title_text=None, hechos_placeholder=None):
     """
     Crea la tabla de prorrateo de capacitación con formato especial,
@@ -376,7 +451,7 @@ def create_considerations_table_subdoc(doc_template, headers, data, keys, column
             row_cells[col_idx].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
     # --- Añadir texto de elaboración (CON AJUSTES) ---
-    texto_posterior = "Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI."
+    texto_posterior = "Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI."
     p = sub.add_paragraph()
     run = p.add_run(texto_posterior)
     p.style = 'FuenteTabla'
