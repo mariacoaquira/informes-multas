@@ -16,9 +16,8 @@ from num2words import num2words
 import base64  # <--- Add this
 import tempfile # <--- Add this
 import os       # <--- Add this
-#Funciones para conversión a pdf en comentarios
-#from docx2pdf import convert
-#import pythoncom
+from docx2pdf import convert
+import pythoncom
 import requests # <--- AÑADIR
 import traceback # <--- AÑADIR
 from jinja2 import Environment
@@ -466,26 +465,31 @@ if cliente_gspread:
         col_rsd1, col_rsd2 = st.columns([1, 1])
         
         with col_rsd1:
-            # El usuario solo ingresa el número base
+            # 1. El usuario ahora ingresa "Número-Año" directamente
             numero_rsd_base = st.text_input(
-                "N.º de RSD (ej: 00245):", 
+                "N.º de RSD y Año (Formato: 00245-2025):", 
                 value=st.session_state.get('numero_rsd_base', ''), 
                 key='numero_rsd_base',
-                placeholder="00245"
+                placeholder="00245-2025"
             )
 
-            # Construir y MOSTRAR el RSD autocompletado dinámicamente
+            # 2. Construcción simplificada (Sin cálculo automático de año)
             numero_rsd_completo = ""
             if numero_rsd_base:
-                year_emision = st.session_state.get('fecha_emision_informe', date.today()).year
                 suffix_sub = st.session_state.get('id_subdireccion_seleccionada', 'ERROR_SUB')
-                numero_rsd_completo = f"{numero_rsd_base.zfill(5)}-{year_emision}-OEFA/DFAI-{suffix_sub}"
+                # Solo agregamos el sufijo institucional
+                numero_rsd_completo = f"{numero_rsd_base}-OEFA/DFAI-{suffix_sub}"
             
-            # --- INICIO CORRECCIÓN ---
-            # Mostrar como métrica para mejor visibilidad
-            st.metric(label="Resolución Completa", value=(numero_rsd_completo or "N/A"))
-            # --- FIN CORRECCIÓN ---
-            st.session_state.numero_rsd = numero_rsd_completo # Guardar el valor completo
+            # 3. Visualización Compacta (Reemplazo de st.metric por st.info)
+            # Esto evita el tamaño gigante y que el texto se corte
+            if numero_rsd_completo:
+                st.info(f"**RSD Completa:** {numero_rsd_completo}")
+            else:
+                st.caption("Ingrese el número y año para generar el identificador completo.")
+            
+            # Guardamos en el estado para el informe
+            st.session_state.numero_rsd = numero_rsd_completo 
+        # --- FIN: CORRECCIÓN RSD v3 ---
 
         with col_rsd2:
             fecha_rsd_ingresada = st.date_input(
@@ -587,7 +591,8 @@ if cliente_gspread:
                     'mes_hoy': format_date(fecha_actual, "MMMM 'de' yyyy", locale='es').lower().replace("septiembre", "setiembre"),
                     'fecha_rsd_texto': format_date(fecha_rsd_dt, "d 'de' MMMM 'de' yyyy", locale='es').replace("septiembre", "setiembre").replace("Septiembre", "Setiembre"),
                     'acronyms': AcronymManager(),
-                    'numbering': NumberingManager()
+                    'numbering': NumberingManager(),
+                    'nombre_administrado': info_caso.get('ADMINISTRADO', '')
                 }
                 nombre_base_administrado = info_caso.get('ADMINISTRADO', '')
                 nombre_final_administrado = nombre_base_administrado
@@ -1646,7 +1651,7 @@ if cliente_gspread:
                 
                 if all_steps_complete_check:
                     st.divider()
-                    st.header("Paso 3.5: Análisis de No Confiscatoriedad")
+                    st.header("Análisis de no confiscatoriedad")
                     
                     if 'confiscatoriedad' not in st.session_state:
                         st.session_state.confiscatoriedad = {'aplica': 'No', 'datos_por_anio': {}}
@@ -1997,7 +2002,7 @@ if cliente_gspread:
                                     headers=["Perfil", "Descripción", "Cantidad"],
                                     data=tabla_personal_data,
                                     keys=['Perfil', 'Descripción', 'Cantidad'],
-                                    texto_posterior='Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI.',
+                                    texto_posterior='Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.',
                                     column_widths=(2, 3, 1) # Ajusta los anchos a tu gusto
                                 )
                                 break
@@ -2281,7 +2286,7 @@ if cliente_gspread:
                     tabla_resumen_final_subdoc = create_summary_table_subdoc(
                         doc_a_renderizar, ["Numeral", "Infracciones", "Monto"], summary_rows, 
                         ['Numeral', 'Infracciones', 'Monto'],
-                        texto_posterior="Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI.",
+                        texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.",
                         column_widths=(1, 4, 1.5)
                     )
                     
@@ -2337,50 +2342,72 @@ if cliente_gspread:
 
                     # --- INICIO: (REQ 2) Lógica de Escenarios Periódicos ---
                     
-                    # Definir qué infracciones son periódicas
                     periodicas_ids = ['INF001', 'INF002', 'INF005', 'INF007', 'INF008', 'INF004']
                     
                     hechos_periodicos = []
                     hechos_no_periodicos = []
 
-                    # 1. Clasificar todos los hechos
+                    # 1. Clasificar todos los hechos (solo guardamos el número como string)
                     for i, datos_hecho in enumerate(st.session_state.imputaciones_data):
                         id_infraccion = datos_hecho.get('id_infraccion', '')
-                        num_hecho_str = f"n.° {i + 1}"
+                        num_hecho_solo = f"{i + 1}" # Guardamos solo el número
                         
-                        # Comprobar si *alguna* de las IDs periódicas está en el ID del hecho
                         if any(pid in id_infraccion for pid in periodicas_ids):
-                            hechos_periodicos.append(num_hecho_str)
+                            hechos_periodicos.append(num_hecho_solo)
                         else:
-                            hechos_no_periodicos.append(num_hecho_str)
+                            hechos_no_periodicos.append(num_hecho_solo)
                     
                     # 2. Construir el texto final
                     texto_final_escenario = ""
                     
-                    # Párrafo para hechos periódicos (Escenario 2)
+                    # --- Párrafo para HECHOS PERIÓDICOS (Escenario 2) ---
                     if hechos_periodicos:
-                        lista_formateada_p = formatear_lista_hechos(hechos_periodicos)
+                        # 1. Llamamos a la función con los prefijos correctos ("al" / "a los")
+                        # Nota: Pasa los números con "n.° " ya incluido para que la función los una
+                        lista_con_tag = [f"n.° {n}" for n in hechos_periodicos]
+                        hechos_listos = formatear_lista_hechos(
+                            lista_con_tag, 
+                            singular_prefix="al hecho imputado", 
+                            plural_prefix="a los hechos imputados"
+                        )
+                        
+                        # 2. Definimos el verbo según la cantidad
+                        verbo = "corresponden" if len(hechos_periodicos) > 1 else "corresponde"
+                        
+                        # 3. Construimos el párrafo final
                         texto_final_escenario += (
-                            f"Ahora bien, en el presente PAS, se advierte que {lista_formateada_p} bajo análisis, corresponden a una obligación periódica, "
-                            f"en ese sentido, se advierte que el administrado ha realizado actividades iguales o semejantes, por lo que, el administrado se "
-                            f"encontraría en el escenario 2. No obstante, no ha presentado ningún comprobante de pago, ni facturas ni boletas para poder ser evaluadas."
+                            f"Sobre ello, respecto {hechos_listos}, de la revisión de los documentos "
+                            f"obrantes en el presente PAS, se advierte que, el administrado se encontraría en "
+                            f"un escenario del tipo 2, toda vez que habría realizado actividades iguales o "
+                            f"semejantes a los costos evitados asociados a las obligaciones incumplidas, dado "
+                            f"que {verbo} a incumplimientos formales y/u obligaciones periódicas. No "
+                            f"obstante, hasta la emisión del presente informe, el administrado no ha presentado "
+                            f"ningún comprobante de pago ni factura para poder ser evaluada."
                         )
 
-                    # Párrafo para hechos NO periódicos (Escenario incierto)
+                    # --- Párrafo para hechos NO PERIÓDICOS (Incierto) ---
                     if hechos_no_periodicos:
-                        lista_formateada_np = formatear_lista_hechos(hechos_no_periodicos)
-                        
-                        # Añadir un salto de línea si ya había texto
                         if texto_final_escenario:
-                            texto_final_escenario += "\n\n" # \n\n se convertirá en un salto de párrafo
-                            
+                            texto_final_escenario += "\n\n"
+                        
+                        # 1. Preparamos la lista con el formato 'n.° X'
+                        lista_con_tag_np = [f"n.° {n}" for n in hechos_no_periodicos]
+                        
+                        # 2. Llamamos a la función pasando los prefijos para que no use los de por defecto
+                        hechos_listos_np = formatear_lista_hechos(
+                            lista_con_tag_np, 
+                            singular_prefix="al hecho imputado", 
+                            plural_prefix="a los hechos imputados"
+                        )
+                        
+                        # 3. Construimos la frase (ya no necesitamos el prefix_np ni el replace)
                         texto_final_escenario += (
-                            f"Además, de la revisión de los documentos obrantes en el presente PAS, en relación con {lista_formateada_np}, no se tiene información "
-                            f"suficiente para determinar en qué escenario se encontraría el administrado, toda vez que, hasta la emisión del presente informe, "
+                            f"Además, de la revisión de los documentos obrantes en el presente PAS, en relación con "
+                            f"{hechos_listos_np}, no se tiene información suficiente para determinar en qué "
+                            f"escenario se encontraría el administrado, toda vez que, hasta la emisión del presente informe, "
                             f"no ha presentado ningún comprobante de pago, ni factura ni boletas para poder ser evaluadas."
                         )
-                    
-                    # Guardar como RichText para que respete los saltos de párrafo
+                    # Guardar como RichText para la plantilla Word
                     context_data['hechos_escenario'] = RichText(texto_final_escenario)
                     
                     # --- FIN: (REQ 2) ---
@@ -2800,28 +2827,38 @@ if cliente_gspread:
                             if buffer_tpl_grad:
                                 doc_tpl_grad = DocxTemplate(buffer_tpl_grad)
                                 
+                                # --- PREPARACIÓN DINÁMICA DE DATOS PARA EL ANEXO ---
                                 grad_data = datos_hecho.get('graduacion', {})
                                 factor_f = datos_hecho.get('factor_f_calculado', 1.0)
                                 
-                                # Preparar los datos para la plantilla
+                                # 1. Inicializar contexto con datos básicos
                                 contexto_grad = {
-                                    'hecho_numero': i + 1,
-                                    # Subtotales formateados como porcentaje (ej. "10%")
-                                    'subtotal_f1': f"{grad_data.get('subtotal_f1', 0):.0%}".replace('.', ','),
-                                    'subtotal_f2': f"{grad_data.get('subtotal_f2', 0):.0%}".replace('.', ','),
-                                    'subtotal_f3': f"{grad_data.get('subtotal_f3', 0):.0%}".replace('.', ','),
-                                    'subtotal_f4': f"{grad_data.get('subtotal_f4', 0):.0%}".replace('.', ','),
-                                    'subtotal_f5': f"{grad_data.get('subtotal_f5', 0):.0%}".replace('.', ','),
-                                    'subtotal_f6': f"{grad_data.get('subtotal_f6', 0):.0%}".replace('.', ','),
-                                    'subtotal_f7': f"{grad_data.get('subtotal_f7', 0):.0%}".replace('.', ','),
-                                    
-                                    # Total F (ej. "142.00%")
-                                    'factor_f_total': f"{factor_f:.2%}".replace('.', ','),
-                                    
-                                    # Opcional: Pasar también las opciones seleccionadas si quieres detallarlas
-                                    # 'seleccion_f1_1': grad_data.get(f"grad_{i}_f1_1.1 Componentes Ambientales", ""),
+                                    'ph_hecho_numero': i + 1,
+                                    # Req: Formato "1.46 (146%)" para el total
+                                    'ph_factor_f_final_completo': f"{factor_f:,.2f} ({factor_f:.0%})",
+                                    # NUEVO: Solo el porcentaje (ej. 130%)
+                                    'ph_factor_f_solo_porcentaje': f"{factor_f:.0%}",
+                                    'ph_suma_f_total': f"{sum(grad_data.get(f'subtotal_f{k}', 0) for k in range(1,8)):.0%}"
                                 }
-                                
+
+                                # 2. Extraer valores individuales (1.1, 1.2, etc.) y subtotales (f1, f2...)
+                                for f_key, f_info in FACTORES_GRADUACION.items():
+                                    # A. Subtotal del factor (f1, f2, etc.)
+                                    val_subtotal = grad_data.get(f"subtotal_{f_key}", 0.0)
+                                    contexto_grad[f"ph_{f_key}_subtotal"] = f"{val_subtotal:.0%}"
+                                    
+                                    # B. Criterios individuales (1.1, 1.2...)
+                                    # El orden de los criterios en FACTORES_GRADUACION define el índice (1, 2, 3...)
+                                    for idx_crit, crit_label in enumerate(f_info["criterios"].keys(), 1):
+                                        # Construimos la llave que guardamos en la interfaz
+                                        key_valor_interfaz = f"grad_{i}_{f_key}_{crit_label}_valor"
+                                        valor_num = grad_data.get(key_valor_interfaz, 0.0)
+                                        
+                                        # Creamos el placeholder: ph_f1_1_valor, ph_f1_2_valor, etc.
+                                        tag_name = f"ph_{f_key}_{idx_crit}_valor"
+                                        contexto_grad[tag_name] = f"{valor_num:.0%}"
+
+                                # 3. Renderizar y procesar
                                 doc_tpl_grad.render(contexto_grad)
                                 buffer_grad_final = io.BytesIO()
                                 doc_tpl_grad.save(buffer_grad_final)
@@ -2835,7 +2872,6 @@ if cliente_gspread:
                                 h2_grad.alignment = WD_ALIGN_PARAGRAPH.CENTER
                                 run_grad = h2_grad.add_run(f"Anexo n.° {anexo_counter}")
                                 run_grad.underline = True
-                                h2_grad.add_run(f"\nGraduación de la Sanción (Hecho n.° {i+1})")
                                 
                                 compositor_final_numerado.doc.add_paragraph() # Espacio
                                 
@@ -2949,5 +2985,4 @@ if cliente_gspread:
 
 if not cliente_gspread:
     st.error(
-
         "🔴 No se pudo establecer la conexión con Google Sheets. Revisa el archivo de credenciales y la conexión a internet.")
