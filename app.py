@@ -16,8 +16,8 @@ from num2words import num2words
 import base64  # <--- Add this
 import tempfile # <--- Add this
 import os       # <--- Add this
-from docx2pdf import convert
-import pythoncom
+#from docx2pdf import convert
+#import pythoncom
 import requests # <--- AÑADIR
 import traceback # <--- AÑADIR
 from jinja2 import Environment
@@ -2917,55 +2917,55 @@ if cliente_gspread:
                     status.update(label="¡Informe generado con éxito!", state="complete", expanded=False)
 
                     # --- INICIO: Reemplazo de Mammoth por Previsualización PDF ---
-                    with st.expander("📄 Previsualización del Documento Final (PDF)"):
-                        pdf_preview_bytes = None
-                        try:
-                            # --- AÑADE ESTA LÍNEA ---
-                            pythoncom.CoInitialize()
-                            # --- FIN DE LÍNEA AÑADIDA ---
+#                    with st.expander("📄 Previsualización del Documento Final (PDF)"):
+#                        pdf_preview_bytes = None
+#                        try:
+#                            # --- AÑADE ESTA LÍNEA ---
+#                            pythoncom.CoInitialize()
+#                            # --- FIN DE LÍNEA AÑADIDA ---
 
                             # Crear archivos temporales seguros
-                            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as temp_docx:
-                                temp_docx.write(final_buffer.getvalue())
-                                temp_docx_path = temp_docx.name # Guardar ruta del docx temporal
+#                            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as temp_docx:
+#                                temp_docx.write(final_buffer.getvalue())
+#                                temp_docx_path = temp_docx.name # Guardar ruta del docx temporal
 
                             # Crear ruta para el PDF temporal
-                            temp_pdf_path = temp_docx_path.replace(".docx", ".pdf")
+#                            temp_pdf_path = temp_docx_path.replace(".docx", ".pdf")
 
-                            st.write("🔄 Convirtiendo a PDF para previsualización...")
+#                           st.write("🔄 Convirtiendo a PDF para previsualización...")
                             # Convertir el DOCX temporal a PDF temporal
-                            convert(temp_docx_path, temp_pdf_path)
+#                            convert(temp_docx_path, temp_pdf_path)
 
                             # Leer el contenido del PDF temporal
-                            if os.path.exists(temp_pdf_path):
-                                with open(temp_pdf_path, "rb") as f_pdf:
-                                    pdf_preview_bytes = f_pdf.read()
-                            else:
-                                st.error("No se pudo generar el archivo PDF temporal.")
+#                            if os.path.exists(temp_pdf_path):
+#                                with open(temp_pdf_path, "rb") as f_pdf:
+#                                    pdf_preview_bytes = f_pdf.read()
+#                            else:
+#                                st.error("No se pudo generar el archivo PDF temporal.")
 
-                        except Exception as e:
-                            st.error(f"Error al convertir DOCX a PDF: {e}")
-                            st.error("Asegúrate de tener LibreOffice (o MS Word en Windows) instalado y accesible.")
-                            st.error("Si usas Streamlit Cloud, configura las dependencias necesarias.")
+#                        except Exception as e:
+#                            st.error(f"Error al convertir DOCX a PDF: {e}")
+#                           st.error("Asegúrate de tener LibreOffice (o MS Word en Windows) instalado y accesible.")
+#                            st.error("Si usas Streamlit Cloud, configura las dependencias necesarias.")
 
-                        finally:
+#                        finally:
                             # Limpiar archivos temporales
-                            if 'temp_docx_path' in locals() and os.path.exists(temp_docx_path):
-                                os.remove(temp_docx_path)
-                            if 'temp_pdf_path' in locals() and os.path.exists(temp_pdf_path):
-                                os.remove(temp_pdf_path)
+#                            if 'temp_docx_path' in locals() and os.path.exists(temp_docx_path):
+#                                os.remove(temp_docx_path)
+#                            if 'temp_pdf_path' in locals() and os.path.exists(temp_pdf_path):
+#                                os.remove(temp_pdf_path)
 
                         # Mostrar el PDF si se generó correctamente
-                        if pdf_preview_bytes:
-                            try:
-                                base64_pdf = base64.b64encode(pdf_preview_bytes).decode('utf-8')
+#                        if pdf_preview_bytes:
+#                            try:
+#                                base64_pdf = base64.b64encode(pdf_preview_bytes).decode('utf-8')
                                 # Incrustar PDF usando un iframe con base64
-                                pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600px" type="application/pdf"></iframe>'
-                                st.markdown(pdf_display, unsafe_allow_html=True)
-                            except Exception as e_display:
-                                st.error(f"Error al mostrar el PDF: {e_display}")
-                        else:
-                            st.warning("No se pudo generar la previsualización en PDF.")
+#                                pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600px" type="application/pdf"></iframe>'
+#                                st.markdown(pdf_display, unsafe_allow_html=True)
+#                            except Exception as e_display:
+#                                st.error(f"Error al mostrar el PDF: {e_display}")
+#                        else:
+#                            st.warning("No se pudo generar la previsualización en PDF.")
                     # --- FIN: Reemplazo ---
 
                     # Botón de descarga para el archivo WORD (.docx) - SIN CAMBIOS
