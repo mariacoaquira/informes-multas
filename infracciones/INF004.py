@@ -10,7 +10,7 @@ from datetime import date, timedelta
 import holidays
 from jinja2 import Environment
 from textos_manager import obtener_fuente_formateada
-from funciones import create_main_table_subdoc, create_table_subdoc, texto_con_numero, create_footnotes_subdoc, format_decimal_dinamico, redondeo_excel
+from funciones import create_main_table_subdoc, create_table_subdoc, texto_con_numero, create_footnotes_subdoc, format_decimal_dinamico, redondeo_excel, create_graduation_table_subdoc
 from sheets import calcular_beneficio_ilicito, calcular_multa, descargar_archivo_drive, \
     calcular_beneficio_ilicito_extemporaneo
 
@@ -43,6 +43,9 @@ def _calcular_costo_evitado_parcial(datos_comunes, horas_para_este_extremo, item
         # 2. HORAS (YA VIENEN CALCULADAS)
         # Se elimina el cálculo de horas que estaba aquí
         horas_calculadas_extremo = redondeo_excel(horas_para_este_extremo, 3)
+
+        # --- NUEVO: Calcular horas por cada ítem individual ---
+        horas_unitarias = horas_calculadas_extremo / items_a_calcular if items_a_calcular > 0 else 0
 
         # 3. Get IPC/TC for the final calculation date
         # ... (Esta sección no cambia) ...
@@ -82,6 +85,11 @@ def _calcular_costo_evitado_parcial(datos_comunes, horas_para_este_extremo, item
         sustento_profesional_local = ''
         placeholders_dinamicos_local = {}
         salario_capturado = False
+        # 4. Inicializar variables
+        placeholders_dinamicos_local = {
+            # Guardamos el placeholder de horas unitarias
+            'horas_por_item_unitario': format_decimal_dinamico(horas_unitarias)
+        }
 
         # 5. Main loop - Receta INF004
         receta_df = df_items_infracciones[df_items_infracciones['ID_Infraccion'] == id_infraccion]
@@ -133,7 +141,14 @@ def _calcular_costo_evitado_parcial(datos_comunes, horas_para_este_extremo, item
             id_general = fila_costo_final['ID_General']; fecha_fuente_dt = fila_costo_final['Fecha_Fuente']; ipc_costeo, tc_costeo = 0.0, 0.0
             if pd.notna(id_general) and 'SAL' in id_general:
                 indices_del_anio = df_indices[df_indices['Indice_Mes'].dt.year == fecha_fuente_dt.year]
-                if not indices_del_anio.empty: ipc_costeo = float(indices_del_anio['IPC_Mensual'].mean()); tc_costeo = float(indices_del_anio['TC_Mensual'].mean())
+                if not indices_del_anio.empty: 
+                    ipc_costeo = float(indices_del_anio['IPC_Mensual'].mean())
+                    tc_costeo = float(indices_del_anio['TC_Mensual'].mean())
+
+                    # --- NUEVO: Placeholder solicitado (Punto 1) ---
+                    # Genera: "Promedio 2015, IPC = 108.456"
+                    placeholders_dinamicos_local['ref_ipc_salario'] = f"Promedio {fecha_fuente_dt.year}, IPC = {ipc_costeo}"
+
             elif pd.notna(id_general) and 'COT' in id_general:
                 ipc_costeo_row = df_indices[df_indices['Indice_Mes'].dt.to_period('M') == fecha_fuente_dt.to_period('M')]
                 if not ipc_costeo_row.empty: ipc_costeo = float(ipc_costeo_row.iloc[0]['IPC_Mensual']); tc_costeo = float(ipc_costeo_row.iloc[0]['TC_Mensual'])
@@ -245,12 +260,40 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
 
     
     # --- SECCIÓN 1: REQUERIMIENTO ORIGINAL (GLOBAL) ---
-    st.markdown("###### 1. Requerimiento Original (Global)")
-    datos_hecho['doc_req_num'] = st.text_input(
-        "N.° de Documento (Carta, Oficio, etc.)", 
-        key=f"doc_req_num_{i}", 
-        value=datos_hecho.get('doc_req_num', '')
+    st.markdown("###### 1. Requerimiento Principal")
+    # --- NUEVA LÓGICA DE SELECCIÓN DE DOCUMENTO ---
+    opciones_doc = ["Acta de Supervisión", "Carta", "Oficio"]
+    valor_guardado = datos_hecho.get('doc_req_num', '')
+
+    # Determinamos el índice inicial para el selectbox
+    index_ini = 0
+    if "Carta" in valor_guardado: index_ini = 1
+    elif "Oficio" in valor_guardado: index_ini = 2
+
+    tipo_doc = st.selectbox(
+        "Tipo de documento del requerimiento:",
+        options=opciones_doc,
+        index=index_ini,
+        key=f"tipo_doc_req_{i}"
     )
+
+    if tipo_doc in ["Carta", "Oficio"]:
+        # Extraemos el número si ya existía (ej: "Carta n.° 123" -> "123")
+        num_previo = ""
+        if "n.° " in valor_guardado:
+            num_previo = valor_guardado.split("n.° ")[-1]
+        
+        num_doc = st.text_input(
+            f"Número de {tipo_doc}:",
+            value=num_previo,
+            key=f"num_doc_req_{i}",
+            placeholder="Ej: 001-2024-OEFA/DFAI"
+        )
+        # Guardamos el formato completo para el informe
+        datos_hecho['doc_req_num'] = f"{tipo_doc} n.° {num_doc}" if num_doc else tipo_doc
+    else:
+        # Para Acta de Supervisión guardamos el nombre directamente
+        datos_hecho['doc_req_num'] = tipo_doc
     
     total_items = st.number_input("Número **total** de requerimientos de información solicitados", min_value=1, step=1,
                                   key=f"num_total_{i}", value=datos_hecho.get('num_items_solicitados', 1))
@@ -261,14 +304,14 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
         fecha_solicitud = st.date_input("Fecha del requerimiento", key=f"fecha_sol_{i}", format="DD/MM/YYYY",
                                         value=datos_hecho.get('fecha_solicitud'))
     with col2:
-        fecha_max_entrega_orig = st.date_input("Fecha máxima de entrega (Original)", min_value=fecha_solicitud, key=f"fecha_ent_orig_{i}",
+        fecha_max_entrega_orig = st.date_input("Fecha máxima de entrega", min_value=fecha_solicitud, key=f"fecha_ent_orig_{i}",
                                       format="DD/MM/YYYY", value=datos_hecho.get('fecha_max_entrega_orig'))
     
     dias_habiles_orig = calcular_dias_habiles(fecha_solicitud, fecha_max_entrega_orig, df_dias_no_laborables)
     fecha_incumplimiento_orig = calcular_fecha_incumplimiento(fecha_max_entrega_orig, df_dias_no_laborables)
     
     with col3:
-        st.metric(label="Plazo Original (Días Hábiles)", value=dias_habiles_orig)
+        st.metric(label="Plazo de entrega (Días Hábiles)", value=dias_habiles_orig)
         
     datos_hecho['fecha_solicitud'] = fecha_solicitud
     datos_hecho['fecha_max_entrega_orig'] = fecha_max_entrega_orig
@@ -278,7 +321,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
     st.divider()
 
 # --- SECCIÓN 2: AMPLIACIÓN DE PLAZO (GLOBAL) ---
-    st.markdown("###### 2. Ampliación de Plazo (Global)")
+    st.markdown("###### 2. Ampliación de plazo")
     aplica_ampliacion = st.radio(
         "¿Se otorgó ampliación de plazo?",
         ["No", "Sí"],
@@ -294,9 +337,9 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
     if aplica_ampliacion == "Sí":
         col_amp1, col_amp2 = st.columns(2)
         with col_amp1:
-            datos_hecho['doc_amp_num'] = st.text_input("N.° de Documento (Ampliación)", key=f"doc_amp_num_{i}", value=datos_hecho.get('doc_amp_num', ''))
+            datos_hecho['doc_amp_num'] = st.text_input("Documento de ampliación", key=f"doc_amp_num_{i}", value=datos_hecho.get('doc_amp_num', ''))
         with col_amp2:
-            datos_hecho['doc_amp_fecha'] = st.date_input("Fecha del Documento (Ampliación)", key=f"doc_amp_fecha_{i}", value=datos_hecho.get('doc_amp_fecha'), format="DD/MM/YYYY")
+            datos_hecho['doc_amp_fecha'] = st.date_input("Fecha del documento de ampliación", key=f"doc_amp_fecha_{i}", value=datos_hecho.get('doc_amp_fecha'), format="DD/MM/YYYY")
 
         col_amp3, col_amp4, col_amp5 = st.columns(3)
         with col_amp3:
@@ -310,7 +353,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
         with col_amp4:
             # --- INICIO: CAMBIO CLAVE (NUEVO CAMPO) ---
             num_items_amp = st.number_input(
-                f"N.° de ítems en ampliación", 
+                f"N.° de ítems a los que aplica la ampliación", 
                 min_value=1, 
                 max_value=total_items, 
                 value=datos_hecho.get('num_items_ampliacion', total_items), # Default: todos
@@ -383,22 +426,22 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
             st.markdown("Asignación de Plazo (para este extremo)")
             
             # El radio solo muestra "Plazo Ampliado" si la ampliación fue activada
-            opciones_plazo = ["Plazo Original"]
+            opciones_plazo = ["Plazo de entrega"]
             if aplica_ampliacion == "Sí":
-                opciones_plazo.append("Plazo Ampliado")
+                opciones_plazo.append("Plazo de entrega ampliado")
             
             plazo_aplicado = st.radio(
                 "¿Qué plazo se aplica a estos ítems?",
                 opciones_plazo,
                 key=f"plazo_aplicado_{i}_{j}",
-                index=0 if extremo.get('plazo_aplicado') == "Plazo Original" else (1 if extremo.get('plazo_aplicado') == "Plazo Ampliado" and aplica_ampliacion == "Sí" else 0),
+                index=0 if extremo.get('plazo_aplicado') == "Plazo de entrega" else (1 if extremo.get('plazo_aplicado') == "Plazo de entrega ampliado" and aplica_ampliacion == "Sí" else 0),
                 horizontal=True
             )
             extremo['plazo_aplicado'] = plazo_aplicado
             
             # Calcular la fecha máxima y de incumplimiento para ESTE extremo
             fecha_max_extremo = None
-            if plazo_aplicado == "Plazo Ampliado":
+            if plazo_aplicado == "Plazo de entrega ampliado":
                 fecha_max_extremo = datos_hecho.get('fecha_max_ampliacion')
             else:
                 fecha_max_extremo = datos_hecho.get('fecha_max_entrega_orig')
@@ -525,7 +568,7 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         fecha_incumplimiento_bi = extremo.get('fecha_incumplimiento_extremo')
         dias_habiles_amp_aplicados = 0
         
-        if extremo.get('plazo_aplicado') == 'Plazo Ampliado':
+        if extremo.get('plazo_aplicado') == 'Plazo de entrega ampliado':
             # Caso A: Este extremo SÍ tuvo ampliación
             dias_habiles_amp = datos_hecho.get('dias_habiles_amp', 0)
             num_items_en_ampliacion = datos_hecho.get('num_items_ampliacion', 1) 
@@ -584,6 +627,17 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             res_bi = calcular_beneficio_ilicito(datos_bi_base)
         if not res_bi or res_bi.get('error'): return res_bi or {'error': 'Error desconocido al calcular el BI.'}
         beneficio_ilicito_uit = res_bi.get('beneficio_ilicito_uit', 0)
+
+        # --- ADICIÓN: Lógica de Moneda COK/COS ---
+        moneda_calculo = res_bi.get('moneda_cos', 'USD') 
+        es_dolares = (moneda_calculo == 'USD')
+        
+        if es_dolares:
+            texto_moneda_bi = "moneda extranjera (Dólares)"
+            ph_bi_abreviatura_moneda = "US$"
+        else:
+            texto_moneda_bi = "moneda nacional (Soles)"
+            ph_bi_abreviatura_moneda = "S/"
         
         # --- CORRECCIÓN: Factor de Graduación ---
         factor_f = datos_hecho.get('factor_f_calculado', 1.0)
@@ -675,18 +729,32 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             data=ce_table_formatted,
             keys=['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
         )
-        filas_bi_crudas, footnote_mapping, datos_para_fuentes = res_bi.get('table_rows', []), res_bi.get('footnote_mapping', {}), res_bi.get('footnote_data', {})
-        footnotes_list = [f"({letra}) {obtener_fuente_formateada(ref_key, datos_para_fuentes, id_infraccion=id_infraccion, es_extemporaneo=es_extemporaneo)}" for letra, ref_key in sorted(footnote_mapping.items())]
+        # --- SOLUCIÓN: Compactar Notas BI ---
+        filas_bi_crudas, fn_map_orig, fn_data = res_bi.get('table_rows', []), res_bi.get('footnote_mapping', {}), res_bi.get('footnote_data', {})
+        
+        # Identificar letras realmente usadas
+        letras_usadas = sorted(list({r for f in filas_bi_crudas if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+        
+        letras_base = "abcdefghijklmnopqrstuvwxyz"
+        map_traduccion = {v: letras_base[i] for i, v in enumerate(letras_usadas)}
+        nuevo_fn_map = {map_traduccion[v]: fn_map_orig[v] for v in letras_usadas if v in fn_map_orig}
+
         filas_bi_para_tabla = []
         for fila in filas_bi_crudas:
-            super_base = fila.get('descripcion_superindice', ''); ref_letra = fila.get('ref')
-            if ref_letra: super_base += f"({ref_letra})"
+            ref_orig = fila.get('ref', '')
+            super_final = str(fila.get('descripcion_superindice', ''))
+            if ref_orig:
+                nuevas = [map_traduccion[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion]
+                if nuevas: super_final += f"({', '.join(nuevas)})"
+            
             filas_bi_para_tabla.append({
-                'descripcion_texto': fila.get('descripcion_texto', ''), 
-                'descripcion_superindice': super_base, 
+                'descripcion_texto': fila.get('descripcion_texto', ''),
+                'descripcion_superindice': super_final,
                 'monto': fila.get('monto', '')
             })
-        footnotes_data = {'list': footnotes_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+
+        fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion, es_extemporaneo)}" for l, k in sorted(nuevo_fn_map.items())]
+        footnotes_data = {'list': fn_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
         tabla_bi_subdoc = create_main_table_subdoc(doc_tpl, ["Descripción", "Monto"], filas_bi_para_tabla, ['descripcion_texto', 'monto'], footnotes_data=footnotes_data, column_widths=(5, 1))
         tabla_multa_subdoc = create_main_table_subdoc(doc_tpl, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'], texto_posterior="Elaboración: Subdirección de Sanción y Gestión Incentivos (SSAG) - DFAI.", estilo_texto_posterior='FuenteTabla', column_widths=(5, 1))
         
@@ -732,17 +800,171 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
 
         # 6. Construcción del Contexto Final
         placeholders_dinamicos = res_ce.get('placeholders_dinamicos', {})
+        # --- DEFINICIÓN DE FECHAS PARA WORD ---
         fecha_max_original_fmt = format_date(datos_hecho.get('fecha_max_entrega_orig'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('fecha_max_entrega_orig') else "N/A"
-        fecha_max_final_fmt = format_date(fecha_incumplimiento_bi, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_incumplimiento_bi else "N/A" # Fecha final es la del BI
-        fecha_extemporanea_fmt = format_date(extremo.get('fecha_extemporanea'), "d 'de' MMMM 'de' yyyy", locale='es') if extremo.get('fecha_extemporanea') else "N/A"
-        doc_amp_fecha_fmt = format_date(datos_hecho.get('doc_amp_fecha'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('doc_amp_fecha') else ''
         
+        # Corrección: Usar la fecha límite real
+        fecha_max_real = datos_hecho.get('fecha_max_ampliacion') if extremo.get('plazo_aplicado') == 'Plazo de entrega ampliado' else datos_hecho.get('fecha_max_entrega_orig')
+        fecha_max_final_fmt = format_date(fecha_max_real, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_max_real else "N/A"
+        
+        # Definición de la variable que causaba el error
+        fecha_extemporanea_fmt = format_date(extremo.get('fecha_extemporanea'), "d 'de' MMMM 'de' yyyy", locale='es') if extremo.get('fecha_extemporanea') else "N/A"
+        
+        doc_amp_fecha_fmt = format_date(datos_hecho.get('doc_amp_fecha'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('doc_amp_fecha') else ''
+
+        # --- Formateo corregido (se eliminan paréntesis manuales) ---
+        n_total = datos_hecho.get('num_items_solicitados', 1)
+        ph_total_items = f"{texto_con_numero(n_total, genero='m')} {'ítem' if n_total == 1 else 'ítems'}"
+        
+        n_ext = items_afectados
+        ph_items_ext = f"{texto_con_numero(n_ext, genero='m')} {'ítem pendiente' if n_ext == 1 else 'ítems pendientes'}"
+        
+        # --- LÓGICA DE FACTORES DE GRADUACIÓN Y CUADRO (ACTUALIZADA Y SEGURA) ---
+        aplica_grad = datos_hecho.get('aplica_graduacion') == 'Sí'
+        # Inicializamos variables para evitar UnboundLocalError si no aplica graduación
+        tabla_grad_subdoc = ""
+        ph_factor_f_completo = "1.00 (100%)"
+        ph_factores_inactivos = ""
+        ph_cantidad_f = "cero (0)"
+        ph_lista_f = ""
+        detalle_grad_rt = ""
+        suma_f_acumulado = 0.0
+        placeholders_anexo_grad = {} # Diccionario para los ph_f1_valor, etc.
+        grad_data = datos_hecho.get('graduacion', {})
+        idx_hecho_actual = numero_hecho - 1
+        # --- LÓGICA DE FACTORES DE GRADUACIÓN (MODELO FINAL PERSONALIZADO) ---
+        factores_activos_lista = []
+        factores_inactivos_labels = [] 
+        detalle_grad_rt = RichText() 
+        rows_cuadro = []
+        suma_f_acumulado = 0.0 
+        letras = "abcdefghijklmnopqrstuvwxyz"
+        count_f = 0
+        
+        # Títulos técnicos para la tabla
+        titulos_f = {
+            'f1': 'Gravedad del daño al interés público y/o bien jurídico protegido',
+            'f2': 'El perjuicio económico causado',
+            'f3': 'Aspectos ambientales o fuentes de contaminación',
+            'f4': 'Reincidencia en la comisión de la infracción',
+            'f5': 'Corrección de la conducta infractora',
+            'f6': 'Adopción de las medidas necesarias para revertir las consecuencias de la conducta infractora',
+            'f7': 'Intencionalidad en la conducta del infractor'
+        }
+
+        # Títulos para el resumen dinámico (Req 3)
+        titulos_resumen_map = {
+            'f1': 'gravedad del daño al ambiente', 'f2': 'perjuicio económico causado',
+            'f3': 'aspectos ambientales o fuentes de contaminación', 'f4': 'reincidencia',
+            'f5': 'corrección de la conducta infractora', 
+            'f6': 'adopción de las medidas necesarias para revertir las consecuencias de la conducta infractora',
+            'f7': 'intencionalidad'
+        }
+
+        if aplica_grad:
+            for cod_f in ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7']:
+                valor_f = grad_data.get(f"subtotal_{cod_f}", 0.0)
+                suma_f_acumulado += valor_f
+                
+                # A. Construir datos para la tabla
+                rows_cuadro.append({
+                    'factor': f"{cod_f}. {titulos_f[cod_f]}",
+                    'calificacion': f"{valor_f:.0%}"
+                })
+
+                if valor_f != 0:
+                    # B. Lógica de sustento para factores ACTIVOS
+                    letra = letras[count_f]
+                    factores_activos_lista.append(f"({letra}) {cod_f}: {titulos_f[cod_f].lower()}")
+                    count_f += 1
+                    
+                    if detalle_grad_rt.xml: 
+                        detalle_grad_rt.add("\n\n")
+                    
+                    detalle_grad_rt.add(f"Factor {cod_f.upper()}: {titulos_f[cod_f].upper()}", bold=True, underline=True)
+                    
+                    prefix_key = f"grad_{idx_hecho_actual}_{cod_f}_"
+                    for key, valor_seleccionado in grad_data.items():
+                        if key.startswith(prefix_key) and not key.endswith("_valor"):
+                            subtitulo = key.replace(prefix_key, "")
+                            detalle_grad_rt.add(f"\n{subtitulo}: ", bold=True)
+                            detalle_grad_rt.add(f"{valor_seleccionado}")
+                else:
+                    # C. Lógica para factores NO ACTIVADOS (Req 3)
+                    factores_inactivos_labels.append(f"{cod_f} ({titulos_resumen_map[cod_f]})")
+
+            # Agregar Totales a la tabla (Texto plano, el formato se da en funciones.py)
+            rows_cuadro.append({'factor': '(f1+f2+f3+f4+f5+f6+f7)', 'calificacion': f"{suma_f_acumulado:.0%}"})
+            factor_f_final_val = 1.0 + suma_f_acumulado
+            rows_cuadro.append({'factor': 'Factores: F = (1+f1+f2+f3+f4+f5+f6+f7)', 'calificacion': f"{factor_f_final_val:.0%}"})
+
+            # Req 2: Formato "1.46 (146%)"
+            ph_factor_f_completo = f"{factor_f_final_val:,.2f} ({factor_f_final_val:.0%})"
+
+            # Req 3: Texto dinámico de inactivos
+            if len(factores_inactivos_labels) == 1:
+                ph_factores_inactivos = f"el factor {factores_inactivos_labels[0]} tiene"
+            elif len(factores_inactivos_labels) > 1:
+                lista_str = ", ".join(factores_inactivos_labels[:-1]) + " y " + factores_inactivos_labels[-1]
+                ph_factores_inactivos = f"los factores {lista_str} tienen"
+            else:
+                ph_factores_inactivos = ""
+
+            # Req 1: Invocar nueva tabla sin líneas internas
+            tabla_grad_subdoc = create_graduation_table_subdoc(
+                doc_tpl, headers=["Factores", "Calificación"], data=rows_cuadro, keys=['factor', 'calificacion'],
+                texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) – DFAI.",
+                column_widths=(5.7, 0.5)
+            )
+
+        # Formatear lista inline
+        ph_lista_f = ", ".join(factores_activos_lista[:-1]) + " y " + factores_activos_lista[-1] if len(factores_activos_lista) > 1 else (factores_activos_lista[0] if factores_activos_lista else "")
+        ph_cantidad_f = texto_con_numero(count_f, genero='m') if count_f > 0 else ""
+        
+        # --- LÓGICA DE GRADUACIÓN (CON FORMATO DE PORCENTAJES) ---
+        placeholders_anexo_grad = {}
+        suma_f_acumulado = 0.0
+
+        if aplica_grad:
+            for f_key in ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7']:
+                # 1. Obtener y formatear subtotal del factor (f1, f2, etc.)
+                subtotal_f = grad_data.get(f"subtotal_{f_key}", 0.0)
+                suma_f_acumulado += subtotal_f
+                placeholders_anexo_grad[f"ph_{f_key}_valor"] = f"{subtotal_f:.0%}" # Ej: 10%
+                
+                # 2. Capturar criterios individuales (1.1, 1.2, etc.)
+                # Buscamos en grad_data las llaves: grad_{idx}_{f_key}_{Nombre}_valor
+                prefix_f = f"grad_{idx_hecho_actual}_{f_key}_"
+                
+                # Para mantener el orden 1.1, 1.2, etc., filtramos y ordenamos las llaves
+                criterios_claves = sorted([k for k in grad_data.keys() if k.startswith(prefix_f) and k.endswith("_valor")])
+                
+                for i, key_crit in enumerate(criterios_claves, 1):
+                    valor_crit = grad_data.get(key_crit, 0.0)
+                    # Creamos placeholders como ph_f1_1_valor, ph_f1_2_valor, etc.
+                    tag_name = f"ph_{f_key}_{i}_valor"
+                    placeholders_anexo_grad[tag_name] = f"{valor_crit:.0%}" # Solo el porcentaje (Ej: 6%)
+
+            # 3. Formato para la Suma Total (f1+...+f7)
+            placeholders_anexo_grad["ph_suma_f_total"] = f"{suma_f_acumulado:.0%}" # Ej: 30%
+
+            # 4. Formato para el Factor F Final (100% + total)
+            factor_f_final_val = 1.0 + suma_f_acumulado
+            # Req: 1.30 (130%)
+            ph_factor_f_completo = f"{factor_f_final_val:,.2f} ({factor_f_final_val:.0%})"
+            
+            # 5. Número de hecho para el anexo
+            placeholders_anexo_grad["ph_hecho_numero"] = str(numero_hecho)
+
         contexto_final_word = {
+            # --- ADICIÓN: Numeración dinámica de Anexo CE ---
+            'ph_anexo_ce_num': "3" if aplica_grad else "2",
             **datos_comunes['context_data'],
             **placeholders_dinamicos,
+            'extremo': extremo,
             'acronyms': datos_comunes['acronym_manager'],
-            'total_items_requeridos': datos_hecho.get('num_items_solicitados', 1),
-            'items_extremo_actual': items_afectados,
+            'total_items_requeridos': ph_total_items,  # <--- Cambio aquí
+            'items_extremo_actual': ph_items_ext,
             'fecha_requerimiento': format_date(datos_hecho_completos.get('fecha_solicitud'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho_completos.get('fecha_solicitud') else "N/A",
             'hecho': {
                 'numero_imputado': numero_hecho,
@@ -781,6 +1003,10 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'dias_habiles_amp': f"{texto_con_numero(datos_hecho.get('dias_habiles_amp', 0), genero='m')} días hábiles",
             # --- FIN: (REQ 3) ---
 
+            # --- NUEVO PLACEHOLDER PARA EL CUADRO ---
+            'tabla_graduacion_sancion': tabla_grad_subdoc,  # Imprime la tabla completa
+            # ----------------------------------------
+
             'aplica_reduccion': aplica_reduccion_str == 'Sí',
             'porcentaje_reduccion': porcentaje_str,
             'texto_reduccion': datos_hecho_completos.get('texto_reduccion', ''),
@@ -791,6 +1017,22 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'multa_con_reduccion_uit': f"{multa_con_reduccion_uit:,.3f} UIT",
             'se_aplica_tope': se_aplica_tope,
             'tope_multa_uit': f"{tope_multa_uit:,.3f} UIT",
+
+            # --- NUEVOS PLACEHOLDERS DE GRADUACIÓN (AÑADIR AQUÍ) ---
+            'aplica_graduacion': aplica_grad,
+            'ph_cantidad_graduacion': ph_cantidad_f,
+            'ph_lista_graduacion_inline': ph_lista_f,
+            'ph_detalle_graduacion_extenso': detalle_grad_rt,
+            **placeholders_anexo_grad,
+            # CORRECCIÓN: Usar ph_factor_f_completo que es la variable definida arriba
+            'ph_factor_f_final_completo': ph_factor_f_completo, 
+            'ph_factores_inactivos_resumen': ph_factores_inactivos,
+            'tabla_graduacion_sancion': tabla_grad_subdoc,
+            # Dentro del diccionario de contexto (alrededor de la línea 920 o 1280)
+            'ph_bi_moneda_texto': texto_moneda_bi,
+            'ph_bi_moneda_simbolo': ph_bi_abreviatura_moneda,
+            'bi_moneda_es_soles': (moneda_calculo == 'PEN'),
+            'bi_moneda_es_dolares': es_dolares,
         }
 
         # 7. Renderizar y Guardar (Cuerpo y Anexo)
@@ -839,7 +1081,9 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'anexos_ce_generados': anexos_ce_generados,
             'ids_anexos': list(filter(None, set(item.get('id_anexo') for item in ce_data_raw))),
             'tabla_detalle_personal': None,
-            'tabla_personal_data': []
+            'tabla_personal_data': [],
+            'contexto_grad': contexto_final_word,
+            'aplica_graduacion': aplica_grad
         }
     
     except Exception as e:
@@ -875,6 +1119,8 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
 
         # 2. Inicializar acumuladores y datos globales
         total_ce_soles = 0.0; total_ce_dolares = 0.0; total_bi_uit = 0.0
+        aplica_grad = datos_hecho.get('aplica_graduacion') == 'Sí'
+        ph_anexo_ce_num = "3" if aplica_grad else "2"
         lista_bi_resultados_completos = [] 
         anexos_ids = set()
         num_hecho = datos_comunes['numero_hecho_actual']
@@ -919,7 +1165,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             horas_orig_del_extremo = horas_item_orig * items_afectados
             horas_amp_del_extremo = 0
             
-            if extremo.get('plazo_aplicado') == 'Plazo Ampliado':
+            if extremo.get('plazo_aplicado') == 'Plazo de entrega ampliado':
                 # Caso A: Este extremo SÍ tuvo ampliación
                 # Horas de ampliación que le corresponden a ESTE extremo
                 horas_amp_del_extremo = horas_item_amp * items_afectados
@@ -964,6 +1210,17 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             else: res_bi_parcial = calcular_beneficio_ilicito(datos_bi_base)
             if not res_bi_parcial or res_bi_parcial.get('error'): st.warning(f"Error BI Extremo {j+1}: {res_bi_parcial.get('error', 'Error')}. Saltando."); continue
 
+            # --- ADICIÓN: Lógica de Moneda COK/COS ---
+            moneda_calculo = res_bi_parcial.get('moneda_cos', 'USD')
+            es_dolares = (moneda_calculo == 'USD')
+            
+            if es_dolares:
+                texto_moneda_bi = "moneda extranjera (Dólares)"
+                ph_bi_abreviatura_moneda = "US$"
+            else:
+                texto_moneda_bi = "moneda nacional (Soles)"
+                ph_bi_abreviatura_moneda = "S/"
+
             # d. Acumular totales
             bi_parcial_uit = res_bi_parcial.get('beneficio_ilicito_uit', 0.0)
             total_ce_soles += ce_soles_parcial; total_ce_dolares += ce_dolares_parcial; total_bi_uit += bi_parcial_uit
@@ -993,6 +1250,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             tabla_ce_anexo_subdoc = create_table_subdoc( tpl_anx_loop, ["Descripción", "Cantidad", "Horas", "Precio asociado (S/)", "Factor de ajuste", "Monto (S/)", "Monto (US$)"], ce_anexo_formatted, ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'] )
             
             contexto_anexo_extremo = { 
+                'ph_anexo_ce_num': ph_anexo_ce_num,
                 **datos_comunes['context_data'], 
                 **(res_ce_parcial.get('placeholders_dinamicos', {})), 
                 'acronyms': datos_comunes['acronym_manager'], 
@@ -1010,21 +1268,31 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
 
             # f. Generar tablas y texto para el CUERPO
             tabla_ce_cuerpo = create_table_subdoc( tpl_principal, ["Descripción", "Cantidad", "Horas", "Precio asociado (S/)", "Factor de ajuste", "Monto (S/)", "Monto (US$)"], ce_anexo_formatted, ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'] )
-            filas_bi_crudas_ext, fn_map_ext, fn_data_ext = res_bi_parcial.get('table_rows', []), res_bi_parcial.get('footnote_mapping', {}), res_bi_parcial.get('footnote_data', {})
-            fn_list_ext = [f"({l}) {obtener_fuente_formateada(k, fn_data_ext, id_infraccion, es_extemporaneo_extremo)}" for l, k in sorted(fn_map_ext.items())]
-            fn_data_dict_ext = {'list': fn_list_ext, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+            # --- SOLUCIÓN: Compactar Notas BI (Multiple) ---
+            filas_bi_crudas_ext, fn_map_orig_ext, fn_data_ext = res_bi_parcial.get('table_rows', []), res_bi_parcial.get('footnote_mapping', {}), res_bi_parcial.get('footnote_data', {})
+            
+            letras_usadas_ext = sorted(list({r for f in filas_bi_crudas_ext if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+            
+            letras_base = "abcdefghijklmnopqrstuvwxyz"
+            map_traduccion_ext = {v: letras_base[i] for i, v in enumerate(letras_usadas_ext)}
+            nuevo_fn_map_ext = {map_traduccion_ext[v]: fn_map_orig_ext[v] for v in letras_usadas_ext if v in fn_map_orig_ext}
+
             filas_bi_con_superindice = []
             for fila in filas_bi_crudas_ext:
-                nueva_fila = fila.copy(); ref_letra = nueva_fila.get('ref')
-                texto_base = str(nueva_fila.get('descripcion_texto', nueva_fila.get('descripcion', '')))
-                super_existente = str(nueva_fila.get('descripcion_superindice', ''))
-                if ref_letra: super_existente += f"({ref_letra})"
-                nueva_fila['descripcion_texto'] = texto_base; nueva_fila['descripcion_superindice'] = super_existente
+                nueva_fila = fila.copy()
+                ref_orig = nueva_fila.get('ref', '')
+                super_final = str(nueva_fila.get('descripcion_superindice', ''))
+                if ref_orig:
+                    nuevas = [map_traduccion_ext[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion_ext]
+                    if nuevas: super_final += f"({', '.join(nuevas)})"
+                
+                nueva_fila['descripcion_texto'] = str(nueva_fila.get('descripcion_texto', nueva_fila.get('descripcion', '')))
+                nueva_fila['descripcion_superindice'] = super_final
                 filas_bi_con_superindice.append(nueva_fila)
-            tabla_bi_cuerpo = create_main_table_subdoc(
-                tpl_principal, ["Descripción", "Monto"], filas_bi_con_superindice,
-                keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict_ext, column_widths=(5, 1)
-            )
+
+            fn_list_ext = [f"({l}) {obtener_fuente_formateada(k, fn_data_ext, id_infraccion, es_extemporaneo_extremo)}" for l, k in sorted(nuevo_fn_map_ext.items())]
+            fn_data_dict_ext = {'list': fn_list_ext, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+            tabla_bi_cuerpo = create_main_table_subdoc(tpl_principal, ["Descripción", "Monto"], filas_bi_con_superindice, keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict_ext, column_widths=(5, 1))
 
             # --- INICIO: LÓGICA DE TEXTO DE RAZONABILIDAD (REQ 7 - CORREGIDO) ---
             dias_plazo_texto_orig = texto_con_numero(datos_hecho.get('dias_habiles_orig', 0), genero='m')
@@ -1054,6 +1322,10 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             ph_dias_item_loop = f"{texto_con_numero(dias_item_final_loop, genero='m')} días hábiles"
             # --- FIN: Formateo de Plazos ---
 
+            # --- Formateo corregido para el bucle ---
+            n_ext_loop = items_afectados
+            ph_items_ext_loop = f"{texto_con_numero(n_ext_loop, genero='m')} {'ítem pendiente' if n_ext_loop == 1 else 'ítems pendientes'}"
+            
             lista_extremos_plantilla_word.append({
                 'loop_index': j + 1,
                 'numeral': f"{num_hecho}.{j + 1}",
@@ -1064,7 +1336,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
                 'fecha_max_presentacion': format_date(fecha_max_entrega_final_extremo, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_max_entrega_final_extremo else "N/A",
                 'fecha_max_original': format_date(datos_hecho.get('fecha_max_entrega_orig'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('fecha_max_entrega_orig') else "N/A",
                 'fecha_extemporanea': format_date(fecha_extemporanea, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_extemporanea else "N/A",
-                'items_extremo_actual': items_afectados,
+                'items_extremo_actual': ph_items_ext_loop,
                 
                 # --- INICIO: PLACEHOLDERS REQUERIDOS (FORMATEADOS) ---
                 'plazo_final_dias_extremo': ph_dias_item_loop,
@@ -1117,10 +1389,23 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
         ph_dias_amp_global = f"{texto_con_numero(dias_habiles_amp_global, genero='m')} días hábiles"
         # --- FIN: Formateo de Plazos ---
 
+        # --- DEFINICIÓN DE FECHAS GLOBALES ---
+        fecha_max_global = datos_hecho.get('fecha_max_ampliacion') if datos_hecho.get('aplica_ampliacion') == 'Sí' else datos_hecho.get('fecha_max_entrega_orig')
+        fecha_max_global_fmt = format_date(fecha_max_global, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_max_global else "N/A"
+        
+        # Definición para evitar el error de Pylance
+        fecha_extemporanea_global_fmt = format_date(next((ext.get('fecha_extemporanea') for ext in datos_hecho['extremos'] if ext.get('fecha_extemporanea')), None), "d 'de' MMMM 'de' yyyy", locale='es')
+        if not fecha_extemporanea_global_fmt: fecha_extemporanea_global_fmt = "N/A"
+
+        # --- Formateo corregido global ---
+        n_total_global = datos_hecho.get('num_items_solicitados', 1)
+        ph_total_items_global = f"{texto_con_numero(n_total_global, genero='m')} {'ítem' if n_total_global == 1 else 'ítems'}"
         # 6. Contexto Final y Renderizado
+        
         contexto_final = {
             **datos_comunes['context_data'],
             'acronyms': datos_comunes['acronym_manager'],
+            'total_items_requeridos': ph_total_items_global,
             'total_items_requeridos': datos_hecho.get('num_items_solicitados', 1),
             'fecha_requerimiento': format_date(datos_hecho.get('fecha_solicitud'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('fecha_solicitud') else "N/A",
             'hecho': {
@@ -1134,7 +1419,10 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             'mh_uit': f"{multa_final_del_hecho_uit:,.3f} UIT",
             'tabla_multa_final': tabla_multa_final_subdoc,
             'texto_explicacion_prorrateo': '',
-            
+            'fecha_max_presentacion': fecha_max_global_fmt,
+            'fecha_extemporanea': fecha_extemporanea_global_fmt, # Usar la variable definida arriba
+            'extremo': datos_hecho['extremos'][0] if datos_hecho['extremos'] else {},
+
             # --- INICIO: (REQ 3) PLACEHOLDERS AMPLIACIÓN (FORMATEADOS) ---
             'aplica_ampliacion': any(ext.get('plazo_aplicado') == 'Plazo Ampliado' for ext in datos_hecho['extremos']),
             'doc_req_num': datos_hecho.get('doc_req_num', ''),
