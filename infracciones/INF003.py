@@ -25,7 +25,30 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
 
     # 1. Asegurar que la lista de datos existe en el estado
     if 'tabla_personal' not in datos_hecho or not isinstance(datos_hecho['tabla_personal'], list):
-        datos_hecho['tabla_personal'] = [{'Perfil': '', 'Descripción': '', 'Cantidad': 0}]
+        # --- ADICIÓN: Dos filas de datos predeterminadas ---
+        datos_hecho['tabla_personal'] = [
+            {
+                'Perfil': 'Gerente General', 
+                'Descripción': (
+                    "El Gerente General se encuentra encargado de:\n"
+                    "- Planear, dirigir y aprobar los objetivos y metas inherentes a las actividades administrativas, operativas y financieras de la empresa.\n"
+                    "- Administrar los recursos materiales, económicos y tecnológicos de la empresa.\n"
+                    "- Supervisar, monitorear y evaluar el desarrollo de los procesos y sistemas que se lleva a cabo en la empresa.\n"
+                    "Planificar, organizar y mantener canales de comunicación que garanticen la aplicación de las disposiciones necesarias para el cumplimiento de los objetivos de la empresa."
+                ), 
+                'Cantidad': 1
+            },
+            {
+                'Perfil': 'Jefe de Seguridad, Salud Ocupacional y Medio Ambiente', 
+                'Descripción': ("El Jefe de Seguridad, Salud Ocupacional y Medio Ambiente se encuentra encargado de:\n"
+                                "- Implementar y gestionar el Sistema de Seguridad, Salud Ocupacional y Medio Ambiente y supervisar la correcta ejecución de las políticas, planes y actividades establecidas en el marco de la legislación vigente.\n"
+                                "- Elaborar el Plan y Programa Anual de Seguridad, Salud y Medio ambiente en el Trabajo, según la normativa vigente.\n"
+                                "- Elaborar el programa anual de entrenamiento y capacitación en temas de seguridad, salud y medio ambiente.\n"
+                                "- Diseñar, implementar y liderar la ejecución del plan de auditorías e inspecciones tanto internas como externas en materia de Seguridad, Salud Ocupacional y Medio Ambiente."
+                                ), 
+                'Cantidad': 1
+            }
+        ]
 
     st.markdown("###### **Extremos del incumplimiento**")
     
@@ -38,7 +61,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
 
             with col1:
                 fecha_supervision = st.date_input(
-                    f"Fecha del Extremo n.° {j + 1}",
+                    f"Fecha del último dia de supervisión",
                     key=f"fecha_supervision_{i}_{j}",
                     value=extremo.get('fecha_incumplimiento'),
                     format="DD/MM/YYYY",
@@ -64,7 +87,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
             
             st.divider() 
 
-            st.markdown("###### **Personal a capacitar (ingresado en el primer extremo)**")
+            st.markdown("###### **Personal a capacitar**")
 
             df_personal = pd.DataFrame(datos_hecho['tabla_personal'])
 
@@ -161,6 +184,17 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
     if resultados_bi.get('error'): return {'error': resultados_bi['error']}
     b_ilicito_uit = resultados_bi.get('beneficio_ilicito_uit', 0)
 
+# --- ADICIÓN: Lógica de Moneda (Mapeo desde moneda_cos de sheets.py) ---
+    moneda_calculo = resultados_bi.get('moneda_cos', 'USD') 
+    es_dolares = (moneda_calculo == 'USD')
+    
+    if es_dolares:
+        texto_moneda_bi = "moneda extranjera (Dólares)"
+        ph_bi_abreviatura_moneda = "US$"
+    else:
+        texto_moneda_bi = "moneda nacional (Soles)"
+        ph_bi_abreviatura_moneda = "S/"
+
     # --- INICIO: Recuperar Factor F y Calcular Multa ---
     factor_f = datos_especificos.get('factor_f_calculado', 1.0)
 
@@ -206,7 +240,7 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
 
     for item in ce_data_raw:
         ce_table_formatted.append({
-            'descripcion': item.get('descripcion', ''),
+            'descripcion': f"{item.get('descripcion', '')} 1/",
             'precio_dolares': f"US$ {item.get('precio_dolares', 0):,.3f}",
             'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}",
             'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
@@ -220,32 +254,47 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
     })
     tabla_ce_subdoc = create_table_subdoc(
         doc_tpl,
-        headers=["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste", "Monto (S/)", "Monto (US$)"],
+        headers=["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste 2/", "Monto (S/)", "Monto (US$) 3/"],
         data=ce_table_formatted,
         keys=['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
     )
     
     # --- INICIO CORRECCIÓN: Superíndices en BI ---
+# --- SOLUCIÓN: Compactar y Reordenar Notas al Pie de BI ---
     filas_bi_crudas = resultados_bi.get('table_rows', [])
+    fn_map_orig = resultados_bi.get('footnote_mapping', {})
+    fn_data = resultados_bi.get('footnote_data', {})
+    
+    # 1. Identificar letras realmente usadas en esta tabla
+    letras_usadas = sorted(list({r for f in filas_bi_crudas if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+    
+    # 2. Crear mapeo secuencial (a, b, c...)
+    letras_base = "abcdefghijklmnopqrstuvwxyz"
+    map_traduccion = {v: letras_base[i] for i, v in enumerate(letras_usadas)}
+    nuevo_fn_map = {map_traduccion[v]: fn_map_orig[v] for v in letras_usadas if v in fn_map_orig}
+
+    # 3. Re-etiquetar filas de la tabla
     filas_bi_para_tabla = []
     for fila in filas_bi_crudas:
-        nueva_fila = fila.copy()
-        ref_letra = nueva_fila.get('ref')
-        texto_base = str(nueva_fila.get('descripcion_texto', ''))
-        super_existente = str(nueva_fila.get('descripcion_superindice', ''))
-        if ref_letra: super_existente += f"({ref_letra})"
-        nueva_fila['descripcion_texto'] = texto_base
-        nueva_fila['descripcion_superindice'] = super_existente
-        filas_bi_para_tabla.append(nueva_fila)
-    # --- FIN ---
+        ref_orig = fila.get('ref', '')
+        super_final = str(fila.get('descripcion_superindice', ''))
+        if ref_orig:
+            nuevas = [map_traduccion[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion]
+            if nuevas: super_final += f"({', '.join(nuevas)})"
+        
+        filas_bi_para_tabla.append({
+            'descripcion_texto': fila.get('descripcion_texto', ''),
+            'descripcion_superindice': super_final,
+            'monto': fila.get('monto', '')
+        })
 
-    footnote_mapping = resultados_bi.get('footnote_mapping', {})
-    datos_para_fuentes = resultados_bi.get('footnote_data', {})
-    footnotes_list = [f"({letra}) {obtener_fuente_formateada(ref_key, datos_para_fuentes, id_infraccion=datos_comunes['id_infraccion'])}" for letra, ref_key in sorted(footnote_mapping.items())]
-    footnotes_data = {'list': footnotes_list, 'elaboration': 'Elaboración: SSAG - DFAI.', 'style': 'FuenteTabla'}
+    # 4. Generar lista de notas filtrada y en orden
+    fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion=datos_comunes['id_infraccion'])}" for l, k in sorted(nuevo_fn_map.items())]
+    footnotes_data = {'list': fn_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
     
     tabla_bi_subdoc = create_main_table_subdoc(doc_tpl, headers=["Descripción", "Monto"], data=filas_bi_para_tabla, keys=['descripcion_texto', 'monto'], footnotes_data=footnotes_data, column_widths=(5, 1))
-    tabla_multa_subdoc = create_main_table_subdoc(doc_tpl, headers=["Componentes", "Monto"], data=resultados_multa.get('multa_data_raw', []), keys=['Componentes', 'Monto'], column_widths=(5, 1))
+    # Define la nota de elaboración
+    tabla_multa_subdoc = create_main_table_subdoc(doc_tpl, headers=["Componentes", "Monto"], data=resultados_multa.get('multa_data_raw', []), keys=['Componentes', 'Monto'], column_widths=(5, 1), texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.", estilo_texto_posterior='FuenteTabla')
 
 
     # --- INICIO CORRECCIÓN (Tabla Personal - Enteros y Fuente) ---
@@ -256,17 +305,18 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
         cantidad = pd.to_numeric(fila.get('Cantidad'), errors='coerce')
         if perfil and cantidad > 0:
             tabla_personal_render_sin_total.append({
-                'Perfil': perfil,
-                'Descripción': fila.get('Descripción', ''),
-                'Cantidad': int(cantidad)
-            })
+            'Perfil': perfil,
+            # Agregamos RichText aquí para que Word entienda los saltos de línea (\n)
+            'Descripción': fila.get('Descripción', ''),
+            'Cantidad': int(cantidad)
+        })
 
     num_personal_total_int = int(datos_especificos.get('num_personal_capacitacion', 0))
     datos_tabla_personal_word = tabla_personal_render_sin_total + [{'Perfil': 'Total', 'Descripción': '', 'Cantidad': num_personal_total_int}]
     
     tabla_detalle_personal_subdoc = create_personal_table_subdoc(
         doc_tpl,
-        headers=["Perfil", "Descripción", "Cantidad"],
+        headers=["Perfil (1)", "Descripción", "Cantidad"],
         data=datos_tabla_personal_word,
         keys=['Perfil', 'Descripción', 'Cantidad'],
         column_widths=(2, 3, 1),
@@ -304,7 +354,7 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
         'fi_mes': resultados_ce.get('fi_mes', ''),
         'fi_ipc': f"{resultados_ce.get('fi_ipc', 0):,.3f}",
         'fi_tc': f"{resultados_ce.get('fi_tc', 0):,.3f}",
-        'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual']}",
+        'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual'] + 1}",
         'texto_explicacion_prorrateo': '', 
         'tabla_detalle_personal': tabla_detalle_personal_subdoc,
         
@@ -319,6 +369,10 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
         'multa_con_reduccion_uit': f"{multa_con_reduccion_uit:,.3f} UIT",
         'se_aplica_tope': se_aplica_tope,
         'tope_multa_uit': f"{tope_multa_uit:,.3f} UIT",
+
+        'bi_moneda_es_dolares': es_dolares,
+        'ph_bi_moneda_texto': texto_moneda_bi,
+        'ph_bi_moneda_simbolo': ph_bi_abreviatura_moneda,
         # --- FIN ---
     }
     
@@ -394,8 +448,12 @@ def _procesar_hecho_multiple(datos_comunes, datos_especificos):
         perfil = fila.get('Perfil')
         cantidad = pd.to_numeric(fila.get('Cantidad'), errors='coerce')
         if perfil and cantidad > 0:
-            tabla_personal_render_sin_total.append({'Perfil': perfil, 'Descripción': fila.get('Descripción', ''), 'Cantidad': int(cantidad)})
-
+        # Usamos RichText en el campo 'Descripción'
+            tabla_personal_render_sin_total.append({
+        'Perfil': perfil, 
+        'Descripción': RichText(fila.get('Descripción', '')), 
+        'Cantidad': int(cantidad)
+    })
     num_personal_total_int = int(datos_especificos.get('num_personal_capacitacion', 0))
     datos_tabla_personal_word = tabla_personal_render_sin_total + [{'Perfil': 'Total', 'Descripción': '', 'Cantidad': num_personal_total_int}]
     
@@ -586,7 +644,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_especificos):
                 footnotes_list_bi.append(f"({letra}) {texto}")
                 textos_ya_agregados_a_lista.add(texto)
 
-    footnotes_data_bi = {'list': footnotes_list_bi, 'elaboration': 'Elaboración: SSAG - DFAI.', 'style': 'FuenteTabla'}
+    footnotes_data_bi = {'list': footnotes_list_bi, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
     
     tabla_bi_consolidada_subdoc = create_consolidated_bi_table_subdoc(
         datos_comunes['doc_tpl'], 
@@ -610,7 +668,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_especificos):
             'tabla_bi': tabla_bi_consolidada_subdoc, 
             'tabla_multa': tabla_multa_final_subdoc
         }, 
-        'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual']}",
+        'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual'] + 1}",
         'fuente_cos': lista_resultados_bi[0].get('fuente_cos', '') if lista_resultados_bi else '',
         'multa_original_uit': f"{multa_final_uit:,.3f} UIT",
         'mh_uit': f"{multa_final_del_hecho_uit:,.3f} UIT",
