@@ -6,11 +6,13 @@ from docxtpl import DocxTemplate, RichText
 from babel.dates import format_date
 
 # --- Imports from your other modules ---
+# Hacia la línea 13 de INF002.py
 from funciones import (create_main_table_subdoc, create_table_subdoc,
                      create_consolidated_bi_table_subdoc, texto_con_numero,
                      create_footnotes_subdoc, create_detailed_ce_table_subdoc,
                      formatear_periodo_monitoreo, create_considerations_table_subdoc,
-                     redondeo_excel, create_ce2_envio_table_subdoc, create_ce2_lab_table_subdoc) # <-- AÑADIR
+                     redondeo_excel, create_ce2_envio_table_subdoc, create_ce2_lab_table_subdoc,
+                     create_graduation_table_subdoc) # <--- AÑADIR ESTA
 from sheets import calcular_beneficio_ilicito, calcular_multa, descargar_archivo_drive
 from textos_manager import obtener_fuente_formateada
 
@@ -62,6 +64,7 @@ def _calcular_costo_evitado_monitoreo(datos_comunes, datos_extremo):
         fuente_salario = ""
         pdf_salario = ""
         texto_ipc_costeo_salario = ""
+        anio_salario = ""
         
         # --- INICIO MODIFICACIÓN: Conjuntos para sustentos por grupo ---
         sustentos_personal_set = set()
@@ -135,6 +138,7 @@ def _calcular_costo_evitado_monitoreo(datos_comunes, datos_extremo):
                             if not indices_anio.empty: 
                                 ipc_costeo, tc_costeo = indices_anio['IPC_Mensual'].mean(), indices_anio['TC_Mensual'].mean()
                                 if not fuente_salario:
+                                    anio_salario = str(anio)
                                     fuente_salario = fuente.iloc[0].get('Fuente_Salario', '')
                                     pdf_salario = fuente.iloc[0].get('PDF_Salario', '')
                                     texto_ipc_costeo_salario = f"Promedio {anio}, IPC = {ipc_costeo:,.6f}"
@@ -225,14 +229,14 @@ def _calcular_costo_evitado_monitoreo(datos_comunes, datos_extremo):
                 todos_los_anexos_final.append(grupo['full'])
         
         # --- INICIO: Helper Original (String simple) ---
+        # Línea 228 aprox. en INF002.py
         def formatear_sustentos(conjunto_sustentos):
             if not conjunto_sustentos:
                 return ""
             
             lista = sorted(list(conjunto_sustentos))
-            # Une los elementos con un salto de línea estándar
-            return "\n".join([f"- {s}" for s in lista])
-        # --- FIN ---
+            # Usamos RichText para que Word reconozca el \n como un salto de párrafo real
+            return RichText("\n".join([f"- {s}" for s in lista]))
 
         sustento_personal_texto = formatear_sustentos(sustentos_personal_set)
         sustento_seguros_texto = formatear_sustentos(sustentos_seguros_set)
@@ -253,12 +257,13 @@ def _calcular_costo_evitado_monitoreo(datos_comunes, datos_extremo):
             "fuente_salario": fuente_salario,
             "pdf_salario": pdf_salario,
             "texto_ipc_costeo_salario": texto_ipc_costeo_salario,
+            "anio_salario": anio_salario,
             
             # Nuevos campos en el retorno
             "sustento_personal": sustento_personal_texto,
             "sustento_seguros": sustento_seguros_texto,
             "sustento_epp": sustento_epp_texto,
-            "sustento_movilidad": sustento_movilidad_texto
+            "sustento_movilidad": sustento_movilidad_texto,
         }
 
     except Exception as e:
@@ -296,7 +301,9 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
             st.markdown(f"**Extremo de Incumplimiento n.° {j + 1}**")
             
             # 1. TIPO DE MONITOREO
-            lista_tipos_monitoreo = df_recetas_inf002['Descripcion_Item'].dropna().unique().tolist()
+            # --- MODIFICACIÓN 1: Restringir tipos de monitoreo ---
+            lista_tipos_monitoreo = ["Monitoreo de Aire", "Monitoreo de Agua", "Monitoreo de Ruido"]
+            
             tipo_monitoreo_sel = st.selectbox(
                 "1. Tipo de Monitoreo",
                 options=lista_tipos_monitoreo,
@@ -304,6 +311,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
                 index=lista_tipos_monitoreo.index(extremo.get('tipo_monitoreo_sel')) if extremo.get('tipo_monitoreo_sel') in lista_tipos_monitoreo else None,
                 placeholder="Seleccione..."
             )
+
             extremo['tipo_monitoreo_sel'] = tipo_monitoreo_sel
             
             # 2. PUNTOS DE MONITOREO
@@ -336,6 +344,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
             )
 
             # 3. PARÁMETROS OMITIDOS (se muestra solo si se eligió un tipo de monitoreo)
+            # --- MODIFICACIÓN 2: Nombres de parámetros desde Costos_Items ---
             if tipo_monitoreo_sel:
                 receta_parametros = df_recetas_inf002[
                     (df_recetas_inf002['Descripcion_Item'].str.contains(tipo_monitoreo_sel, na=False)) &
@@ -343,7 +352,11 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
                 ]
                 ids_items_parametros = receta_parametros['ID_Item_Infraccion'].tolist()
                 
-                opciones_parametros = df_costos_items[df_costos_items['ID_Item_Infraccion'].isin(ids_items_parametros)]['Descripcion_Item'].unique().tolist()
+                # Filtramos la tabla de costos usando los IDs encontrados en la receta, 
+                # pero extraemos los nombres (labels) de 'Descripcion_Item' de la tabla de costos.
+                opciones_parametros = df_costos_items[
+                    df_costos_items['ID_Item_Infraccion'].isin(ids_items_parametros)
+                ]['Descripcion_Item'].unique().tolist()
                 
                 parametros_sel = st.multiselect(
                     "3. Parámetros Omitidos",
@@ -530,24 +543,46 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
     footnotes_list_bi = [f"({letra}) {obtener_fuente_formateada(ref_key, res_bi.get('footnote_data', {}), id_infraccion=id_infraccion)}" for letra, ref_key in res_bi.get('footnote_mapping', {}).items()]
     footnotes_bi = {'list': footnotes_list_bi, 'style': 'FuenteTabla'}
     tabla_bi_subdoc = create_main_table_subdoc(doc_tpl_para_tablas, ["Descripción", "Monto"], filas_bi_para_tabla, ['descripcion_texto', 'monto'], footnotes_data=footnotes_bi, column_widths=(5, 1.5))
-    tabla_multa_subdoc = create_main_table_subdoc(doc_tpl_para_tablas, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'], column_widths=(5, 1.5))
+    tabla_multa_subdoc = create_main_table_subdoc(doc_tpl_para_tablas, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'], column_widths=(5, 1.5), texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.", estilo_texto_posterior='FuenteTabla')
 
-    # --- TAREA CLAVE: Crear la tabla de Consideraciones PARA EL CUERPO ---
+# 1. Extraer datos del extremo único
     frecuencia_seleccionada = extremo.get('frecuencia_monitoreo', 'Trimestral')
     periodo = formatear_periodo_monitoreo(extremo.get('fecha_base'), frecuencia_seleccionada)
     matriz = extremo.get('tipo_monitoreo_sel', '').replace('Monitoreo de ', '').replace(' Ambiental', '')
+    # --- Preparación de datos para la tabla de consideraciones ---
     cantidad_puntos = extremo.get('cantidad', 1)
     nombres_puntos = extremo.get('nombres_puntos', '')
-    puntos_descripcion = f"{texto_con_numero(cantidad_puntos)} punto{'s' if cantidad_puntos > 1 else ''} de monitoreo: {nombres_puntos}"
-    parametros = ", ".join(extremo.get('parametros_seleccionados', []))
-    datos_tabla_consideraciones = [{'Periodo del monitoreo': periodo, 'Matriz': matriz, 'Puntos de monitoreo': puntos_descripcion, 'Parámetros': parametros }]
+    # Se agrega .capitalize() para que inicie con "Un (1)..."
+    puntos_descripcion = f"{texto_con_numero(cantidad_puntos).capitalize()} punto{'s' if cantidad_puntos > 1 else ''} de monitoreo: {nombres_puntos}"
     
-    tabla_consideraciones_consolidada_subdoc = create_considerations_table_subdoc(
-        doc_tpl_para_tablas, 
-        ["Periodo del monitoreo", "Matriz", "Puntos de monitoreo", "Parámetros"], 
-        datos_tabla_consideraciones, 
-        ['Periodo del monitoreo', 'Matriz', 'Puntos de monitoreo', 'Parámetros']
-    )
+    # Nueva lógica para Parámetros con conteo y mayúscula inicial
+    lista_params = extremo.get('parametros_seleccionados', [])
+    cant_params = len(lista_params)
+    parametros = f"{texto_con_numero(cant_params).capitalize()} parámetro{'s' if cant_params > 1 else ''}: {', '.join(lista_params)}"
+
+    # 2. Construir la lista de datos para la tabla (Esto es lo que faltaba)
+    datos_tabla_consideraciones = [{
+        'Periodo del monitoreo': periodo,
+        'Matriz': matriz,
+        'Puntos de monitoreo': puntos_descripcion,
+        'Parámetros': parametros
+    }]
+
+    # 3. Generar el subdocumento de la tabla
+    # Nota: Usamos doc_tpl_para_tablas (el objeto creado desde el buffer en la línea 415)
+    tabla_consideraciones_consolidada_subdoc = ""
+    try:
+        tabla_consideraciones_consolidada_subdoc = create_considerations_table_subdoc(
+            doc_tpl_para_tablas,
+            ["Periodo del monitoreo", "Matriz", "Puntos de monitoreo", "Parámetros"],
+            datos_tabla_consideraciones,
+            ['Periodo del monitoreo', 'Matriz', 'Puntos de monitoreo', 'Parámetros'], 
+            texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.", 
+            estilo_texto_posterior='FuenteTabla'
+        )
+    except Exception as e_tabla:
+        st.error(f"Error generando tabla de consideraciones: {e_tabla}")
+        tabla_consideraciones_consolidada_subdoc = "Error en la generación de la tabla."
 
     # --- INICIO: ADICIÓN DE LABEL PARA PÁRRAFO BI ---
     tipo_monitoreo_sel = extremo.get('tipo_monitoreo_sel', '')
@@ -564,8 +599,160 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
                                  tipo_servicio == "Solo análisis de parámetros")
     # La bandera para la plantilla debe ser 'True' si el párrafo debe MOSTRARSE
     mostrar_parrafo_especial = not es_ruido_y_solo_analisis
+
+# Línea 570 aprox. en INF002.py
+    # --- CORRECCIÓN: Bandera para párrafo de análisis ---
+    es_monitoreo_ruido = ("Monitoreo de Ruido" in tipo_monitoreo_sel)
+    # El párrafo solo se muestra si NO es ruido
+    mostrar_parrafo_especial = not es_monitoreo_ruido
     # --- FIN: Nueva Condición ---
     # --- FIN: ADICIÓN DE LABEL ---
+
+# --- 2.1. Lógica de Moneda (REQ 3) ---
+    moneda_calculo = res_bi.get('moneda_cos', 'USD')
+    es_dolares = (moneda_calculo == 'USD')
+    texto_moneda_bi = "moneda extranjera (Dólares)" if es_dolares else "moneda nacional (Soles)"
+    ph_bi_abreviatura_moneda = "US$" if es_dolares else "S/"
+
+    # --- 2.2. Superíndices BI Reordenados (REQ 4) ---
+    filas_bi_crudas = res_bi.get('table_rows', [])
+    fn_map_orig = res_bi.get('footnote_mapping', {})
+    fn_data = res_bi.get('footnote_data', {})
+    letras_usadas = sorted(list({r for f in filas_bi_crudas if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+    letras_base = "abcdefghijklmnopqrstuvwxyz"
+    map_traduccion = {v: letras_base[i] for i, v in enumerate(letras_usadas)}
+    nuevo_fn_map = {map_traduccion[v]: fn_map_orig[v] for v in letras_usadas if v in fn_map_orig}
+
+    filas_bi_para_tabla = []
+    for fila in filas_bi_crudas:
+        ref_orig = fila.get('ref', '')
+        super_final = str(fila.get('descripcion_superindice', ''))
+        if ref_orig:
+            nuevas = [map_traduccion[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion]
+            if nuevas: super_final += f"({', '.join(nuevas)})"
+        filas_bi_para_tabla.append({'descripcion_texto': fila.get('descripcion_texto', ''), 'descripcion_superindice': super_final, 'monto': fila.get('monto', '')})
+
+    fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion=id_infraccion)}" for l, k in sorted(nuevo_fn_map.items())]
+    footnotes_bi = {'list': fn_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+    tabla_bi_subdoc = create_main_table_subdoc(doc_tpl_para_tablas, ["Descripción", "Monto"], filas_bi_para_tabla, ['descripcion_texto', 'monto'], footnotes_data=footnotes_bi, column_widths=(5, 1.5))
+
+    # --- 2.3. Lógica de Factores de Graduación e IPC (REQ 2, 5, 7) ---
+    aplica_grad = datos_hecho.get('aplica_graduacion') == 'Sí'
+    # Inicialización de variables de graduación
+    tabla_grad_subdoc, ph_factor_f_completo, ph_factores_inactivos = "", "1.00 (100%)", ""
+    ph_cantidad_f, ph_lista_f, detalle_grad_rt = "cero (0)", "", ""
+    placeholders_anexo_grad = {}
+
+    # --- LÓGICA DE GRADUACIÓN (COPIA EXACTA DE INF004) ---
+    aplica_grad = datos_hecho.get('aplica_graduacion') == 'Sí'
+    
+    # Inicialización de variables para evitar errores
+    tabla_grad_subdoc = ""
+    ph_factor_f_completo = "1.00 (100%)"
+    ph_factores_inactivos = ""
+    ph_cantidad_f = "cero (0)"
+    ph_lista_f = ""
+    detalle_grad_rt = ""
+    suma_f_acumulado = 0.0
+    placeholders_anexo_grad = {} 
+    
+    # Extraemos datos y número de hecho
+    grad_data = datos_hecho.get('graduacion', {})
+    numero_hecho_int = datos_comunes.get('numero_hecho_actual', 1)
+    idx_hecho_actual = numero_hecho_int - 1
+    
+    factores_activos_lista = []
+    factores_inactivos_labels = [] 
+    detalle_grad_rt = RichText() 
+    rows_cuadro = []
+    suma_f_acumulado = 0.0 
+    letras = "abcdefghijklmnopqrstuvwxyz"
+    count_f = 0
+    
+    # Títulos técnicos para la tabla
+    titulos_f = {
+        'f1': 'Gravedad del daño al interés público y/o bien jurídico protegido',
+        'f2': 'El perjuicio económico causado',
+        'f3': 'Aspectos ambientales o fuentes de contaminación',
+        'f4': 'Reincidencia en la comisión de la infracción',
+        'f5': 'Corrección de la conducta infractora',
+        'f6': 'Adopción de las medidas necesarias para revertir las consecuencias de la conducta infractora',
+        'f7': 'Intencionalidad en la conducta del infractor'
+    }
+
+    # Títulos para el resumen dinámico
+    titulos_resumen_map = {
+        'f1': 'gravedad del daño al ambiente', 'f2': 'perjuicio económico causado',
+        'f3': 'aspectos ambientales o fuentes de contaminación', 'f4': 'reincidencia',
+        'f5': 'corrección de la conducta infractora', 
+        'f6': 'adopción de las medidas necesarias para revertir las consecuencias de la conducta infractora',
+        'f7': 'intencionalidad'
+    }
+
+    if aplica_grad:
+        for cod_f in ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7']:
+            valor_f = grad_data.get(f"subtotal_{cod_f}", 0.0)
+            suma_f_acumulado += valor_f
+            
+            # A. Construir datos para la tabla
+            rows_cuadro.append({
+                'factor': f"{cod_f}. {titulos_f[cod_f]}",
+                'calificacion': f"{valor_f:.0%}"
+            })
+
+            if valor_f != 0:
+                letra = letras[count_f]
+                factores_activos_lista.append(f"({letra}) {cod_f}: {titulos_f[cod_f].lower()}")
+                count_f += 1
+                
+                if detalle_grad_rt.xml: detalle_grad_rt.add("\n\n")
+                detalle_grad_rt.add(f"Factor {cod_f.upper()}: {titulos_f[cod_f].upper()}", bold=True, underline=True)
+                
+                prefix_key = f"grad_{idx_hecho_actual}_{cod_f}_"
+                for key, valor_seleccionado in grad_data.items():
+                    if key.startswith(prefix_key) and not key.endswith("_valor"):
+                        subtitulo = key.replace(prefix_key, "")
+                        detalle_grad_rt.add(f"\n{subtitulo}: ", bold=True)
+                        detalle_grad_rt.add(f"{valor_seleccionado}")
+            else:
+                factores_inactivos_labels.append(f"{cod_f} ({titulos_resumen_map[cod_f]})")
+
+        # Filas de Totales
+        rows_cuadro.append({'factor': '(f1+f2+f3+f4+f5+f6+f7)', 'calificacion': f"{suma_f_acumulado:.0%}"})
+        factor_f_final_val = 1.0 + suma_f_acumulado
+        rows_cuadro.append({'factor': 'Factores: F = (1+f1+f2+f3+f4+f5+f6+f7)', 'calificacion': f"{factor_f_final_val:.0%}"})
+
+        # Resumen de Inactivos
+        if len(factores_inactivos_labels) == 1:
+            ph_factores_inactivos = f"el factor {factores_inactivos_labels[0]} tiene"
+        elif len(factores_inactivos_labels) > 1:
+            lista_str = ", ".join(factores_inactivos_labels[:-1]) + " y " + factores_inactivos_labels[-1]
+            ph_factores_inactivos = f"los factores {lista_str} tienen"
+
+        # Crear tabla subdoc
+        tabla_grad_subdoc = create_graduation_table_subdoc(
+            doc_tpl_para_tablas, headers=["Factores", "Calificación"], data=rows_cuadro, keys=['factor', 'calificacion'],
+            texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) – DFAI.",
+            column_widths=(5.7, 0.5)
+        )
+
+        # Generar placeholders individuales (ph_f1_valor, etc.)
+        for f_key in ['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7']:
+            subtotal_f = grad_data.get(f"subtotal_{f_key}", 0.0)
+            placeholders_anexo_grad[f"ph_{f_key}_valor"] = f"{subtotal_f:.0%}"
+            prefix_f = f"grad_{idx_hecho_actual}_{f_key}_"
+            criterios_claves = sorted([k for k in grad_data.keys() if k.startswith(prefix_f) and k.endswith("_valor")])
+            for i, key_crit in enumerate(criterios_claves, 1):
+                placeholders_anexo_grad[f"ph_{f_key}_{i}_valor"] = f"{grad_data.get(key_crit, 0.0):.0%}"
+
+        placeholders_anexo_grad["ph_suma_f_total"] = f"{suma_f_acumulado:.0%}"
+        placeholders_anexo_grad["ph_hecho_numero"] = str(numero_hecho_int)
+        ph_factor_f_completo = f"{factor_f_final_val:,.2f} ({factor_f_final_val:.0%})"
+        ph_cantidad_f = texto_con_numero(count_f, genero='m')
+        ph_lista_f = ", ".join(factores_activos_lista[:-1]) + " y " + factores_activos_lista[-1] if len(factores_activos_lista) > 1 else (factores_activos_lista[0] if factores_activos_lista else "")
+
+    ph_num_anexo_grad = "3" if aplica_grad else "2"
+    # --- FIN LÓGICA DE GRADUACIÓN ---
 
     # 3. Contexto y renderizado para el CUERPO DEL INFORME
     contexto_final_word = {
@@ -600,6 +787,27 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         'se_aplica_tope': se_aplica_tope,
         'tope_multa_uit': f"{tope_multa_uit:,.3f} UIT",
         # --- FIN: PLACEHOLDERS DE REDUCCIÓN Y TOPE ---
+        # REQ 3 & 5
+        'bi_moneda_es_dolares': es_dolares,
+        'ph_anio_salario': res_ce.get('anio_salario', ''),
+        'ph_bi_moneda_texto': texto_moneda_bi,
+        'ph_bi_moneda_simbolo': ph_bi_abreviatura_moneda,
+        'ph_ipc_promedio_salario': res_ce.get('texto_ipc_costeo_salario', ''),
+        
+        # REQ 7 (Numeración de Anexo)
+        'ph_anexo_num_grad': ph_num_anexo_grad,
+        
+        'aplica_graduacion': aplica_grad,
+        'tabla_graduacion_sancion': tabla_grad_subdoc,
+        'ph_factor_f_final_completo': ph_factor_f_completo,
+        'ph_factores_inactivos_resumen': ph_factores_inactivos,
+        'ph_detalle_graduacion_extenso': detalle_grad_rt,
+        'ph_cantidad_graduacion': ph_cantidad_f,      # Antes: ph_cantidad_f_grad
+        'ph_lista_graduacion_inline': ph_lista_f,
+        'ph_anexo_num_grad': ph_num_anexo_grad,
+        **placeholders_anexo_grad,  # IMPORTANTE: Esto habilita ph_f1_valor, ph_f1_1_valor, etc.
+        
+        'sustento_seguros': res_ce.get('sustento_seguros', ''),
     }
     
     doc_tpl_cuerpo = DocxTemplate(io.BytesIO(buffer_cuerpo.getvalue()))
@@ -617,8 +825,6 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             # Crear todas las tablas de CE específicamente para el anexo
             tabla_consideraciones_anexo_subdoc = create_considerations_table_subdoc(anexo_tpl, ["Periodo del monitoreo", "Matriz", "Puntos de monitoreo", "Parámetros"], datos_tabla_consideraciones, ['Periodo del monitoreo', 'Matriz', 'Puntos de monitoreo', 'Parámetros'])
             subdoc_anexo_ce1 = create_detailed_ce_table_subdoc(anexo_tpl, ce1_items_ordenados, res_ce['ce1_soles'], res_ce['ce1_dolares']) if res_ce['ce1_items'] else None
-            
-# ... (código anterior: subdoc_anexo_ce1 = ...)
 
             subdoc_anexo_ce2_envio, subdoc_anexo_ce2_lab, subdoc_anexo_resumen_ce2, subdoc_anexo_resumen_total = None, None, None, None
 
@@ -805,10 +1011,16 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
         frecuencia_seleccionada = extremo.get('frecuencia_monitoreo', 'Trimestral')
         periodo = formatear_periodo_monitoreo(extremo.get('fecha_base'), frecuencia_seleccionada)
         matriz = extremo.get('tipo_monitoreo_sel', '').replace('Monitoreo de ', '').replace(' Ambiental', '')
+        # --- TASK A: Collect data for the consolidated considerations table ---
         cantidad_puntos = extremo.get('cantidad', 1)
         nombres_puntos = extremo.get('nombres_puntos', '')
-        puntos_descripcion = f"{texto_con_numero(cantidad_puntos)} punto{'s' if cantidad_puntos > 1 else ''} de monitoreo: {nombres_puntos}"
-        parametros = ", ".join(extremo.get('parametros_seleccionados', []))
+        # Capitalización de puntos
+        puntos_descripcion = f"{texto_con_numero(cantidad_puntos).capitalize()} punto{'s' if cantidad_puntos > 1 else ''} de monitoreo: {nombres_puntos}"
+        
+        # Capitalización y formato para parámetros
+        lista_params = extremo.get('parametros_seleccionados', [])
+        cant_params = len(lista_params)
+        parametros = f"{texto_con_numero(cant_params).capitalize()} parámetro{'s' if cant_params > 1 else ''}: {', '.join(lista_params)}"
         datos_tabla_consideraciones_extremo = {
             'Periodo del monitoreo': periodo,
             'Matriz': matriz,
