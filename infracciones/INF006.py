@@ -189,6 +189,19 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
         res_bi = calcular_beneficio_ilicito(datos_bi_base)
         if not res_bi or res_bi.get('error'): return res_bi or {'error': 'Error BI.'}
         bi_uit = res_bi.get('beneficio_ilicito_uit', 0)
+
+        # --- INICIO: Lógica de Moneda (Basado en INF004) ---
+        moneda_calculo = res_bi.get('moneda_cos', 'USD') 
+        es_dolares = (moneda_calculo == 'USD')
+        
+        if es_dolares:
+            texto_moneda_bi = "moneda extranjera (Dólares)"
+            ph_bi_abreviatura_moneda = "US$"
+        else:
+            texto_moneda_bi = "moneda nacional (Soles)"
+            ph_bi_abreviatura_moneda = "S/"
+        # --- FIN ---
+
         res_multa = calcular_multa({**datos_comunes, 'beneficio_ilicito': bi_uit})
         multa_uit = res_multa.get('multa_final_uit', 0)
 
@@ -199,11 +212,39 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
         ce_fmt.append({'descripcion': 'Total', 'monto_soles': f"S/ {total_soles:,.3f}", 'monto_dolares': f"US$ {total_dolares:,.3f}"})
         tabla_ce = create_table_subdoc(doc_tpl_bi, ["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste", "Monto (S/)", "Monto (US$)"], ce_fmt, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
         # Tabla BI
-        fn_map, fn_data = res_bi.get('footnote_mapping', {}), res_bi.get('footnote_data', {})
-        fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion, False)}" for l, k in sorted(fn_map.items())] # es_extemporaneo=False
-        fn_data_dict = {'list': fn_list, 'elaboration': 'Elaboración: SSAG - DFAI.', 'style': 'FuenteTabla'}
-        tabla_bi = create_main_table_subdoc(doc_tpl_bi, ["Descripción", "Monto"], res_bi.get('table_rows', []), keys=['descripcion', 'monto'], footnotes_data=fn_data_dict)
-        # Tabla Multa
+        # --- SOLUCIÓN: Compactar y Reordenar Notas al Pie de BI (Basado en INF004) ---
+        filas_bi_crudas, fn_map_orig, fn_data = res_bi.get('table_rows', []), res_bi.get('footnote_mapping', {}), res_bi.get('footnote_data', {})
+
+        # 1. Identificar letras realmente usadas en esta tabla
+        letras_usadas = sorted(list({r for f in filas_bi_crudas if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+        
+        # 2. Crear mapeo secuencial (a, b, c...)
+        letras_base = "abcdefghijklmnopqrstuvwxyz"
+        map_traduccion = {v: letras_base[i] for i, v in enumerate(letras_usadas)}
+        nuevo_fn_map = {map_traduccion[v]: fn_map_orig[v] for v in letras_usadas if v in fn_map_orig}
+
+        # 3. Re-etiquetar filas de la tabla combinando superíndices
+        filas_bi_para_tabla = []
+        for fila in filas_bi_crudas:
+            nueva_fila = fila.copy()
+            ref_orig = nueva_fila.get('ref', '')
+            super_final = str(nueva_fila.get('descripcion_superindice', ''))
+            if ref_orig:
+                nuevas = [map_traduccion[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion]
+                if nuevas: super_final += f"({', '.join(nuevas)})"
+            
+            filas_bi_para_tabla.append({
+                'descripcion_texto': fila.get('descripcion_texto', ''),
+                'descripcion_superindice': super_final,
+                'monto': fila.get('monto', '')
+            })
+
+        # 4. Generar lista de notas filtrada y en orden
+        fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion, False)}" for l, k in sorted(nuevo_fn_map.items())]
+        fn_data_dict = {'list': fn_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+        
+        tabla_bi = create_main_table_subdoc(doc_tpl_bi, ["Descripción", "Monto"], filas_bi_para_tabla, keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict, column_widths=(5, 1))
+
         tabla_multa = create_main_table_subdoc(doc_tpl_bi, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'])
 
         # Tabla Personal (con enteros y fuente)
@@ -234,6 +275,11 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
              'fi_mes': res_ce.get('fi_mes', ''),
              'fi_ipc': f"{res_ce.get('fi_ipc', 0):,.3f}",
              'fi_tc': f"{res_ce.get('fi_tc', 0):,.3f}",
+             'bi_uit': f"{bi_uit:,.3f} UIT",
+            'bi_moneda_es_dolares': es_dolares,
+            'ph_bi_moneda_texto': texto_moneda_bi,
+            'ph_bi_moneda_simbolo': ph_bi_abreviatura_moneda,
+            'bi_moneda_es_soles': (moneda_calculo == 'PEN'),
         }
         doc_tpl_bi.render(contexto_word, autoescape=True); buf_final_hecho = io.BytesIO(); doc_tpl_bi.save(buf_final_hecho)
 

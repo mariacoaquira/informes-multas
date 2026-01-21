@@ -104,8 +104,9 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
     }
     try:
         # --- 1. Datos del Extremo y Generales ---
-        tipo_incumplimiento = extremo_data.get('tipo_extremo') # "No presentó" o "Presentó fuera de plazo"
-        incluir_capacitacion_flag = extremo_data.get('incluir_capacitacion') == "Sí"
+        tipo_incumplimiento = extremo_data.get('tipo_extremo')
+        # Ahora el flag es automático: Si no presentó, SIEMPRE incluye capacitación
+        incluir_capacitacion_flag = (tipo_incumplimiento == "No presentó")
         fecha_incumplimiento_extremo = extremo_data.get('fecha_incumplimiento')
         num_personal_ce2 = datos_hecho_general.get('num_personal_capacitacion', 0)
 
@@ -182,7 +183,17 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
                     costo_final = df_candidatos.loc[df_candidatos['Diferencia_Dias'].idxmin()]
                     id_gen = costo_final['ID_General']; fecha_f = costo_final['Fecha_Fuente']
                     ipc_cost, tc_cost = 0.0, 0.0
-                    if pd.notna(id_gen) and 'SAL' in id_gen: idx_anio = df_ind_ce1[df_ind_ce1['Indice_Mes'].dt.year == fecha_f.year]; ipc_cost, tc_cost = (float(idx_anio['IPC_Mensual'].mean()), float(idx_anio['TC_Mensual'].mean())) if not idx_anio.empty else (0.0, 0.0)
+                    if pd.notna(id_gen) and 'SAL' in id_gen: 
+                        idx_anio = df_ind_ce1[df_ind_ce1['Indice_Mes'].dt.year == fecha_f.year]; 
+                        ipc_cost, tc_cost = (float(idx_anio['IPC_Mensual'].mean()), float(idx_anio['TC_Mensual'].mean())) if not idx_anio.empty else (0.0, 0.0)
+                        
+                        # --- NUEVO: Capturar Texto de IPC Promedio ---
+                        f_row = df_sal[df_sal['ID_Salario'] == id_gen]
+                        if not f_row.empty:
+                            if 'placeholders_dinamicos' not in fuentes_ce1: 
+                                fuentes_ce1['placeholders_dinamicos'] = {}
+                            # Genera: "Promedio 2015, IPC = 108.456"
+                            fuentes_ce1['placeholders_dinamicos']['ref_ipc_salario'] = f"Promedio {fecha_f.year}, IPC = {ipc_cost:,.6f}"
                     elif pd.notna(id_gen) and 'COT' in id_gen: idx_row = df_ind_ce1[df_ind_ce1['Indice_Mes'].dt.to_period('M') == fecha_f.to_period('M')]; ipc_cost, tc_cost = (float(idx_row.iloc[0]['IPC_Mensual']), float(idx_row.iloc[0]['TC_Mensual'])) if not idx_row.empty else (0.0, 0.0)
                     if ipc_cost == 0 or pd.isna(ipc_cost): continue
                     if pd.notna(id_gen):
@@ -268,29 +279,36 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
 # ---------------------------------------------------------------------
 
 def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
-    """
-    Renderiza la interfaz para INF007 (solo Manifiestos).
-    1. Inputs de Capacitación (CE2) - Global.
-    2. Lista dinámica de "Extremos" con Año y Trimestre.
-    """
     st.markdown("##### Detalles del Incumplimiento: Manifiestos SIGERSOL (INF007)")
     datos_hecho = st.session_state.imputaciones_data[i] 
 
-    # --- SECCIÓN 1: DATOS DE CAPACITACIÓN (CE2 - GLOBAL) (Req 5) ---
-    st.markdown("###### **1. Personal a capacitar (CE2)**")
-    st.caption("Estos datos se usarán *solo* para los extremos marcados como 'No presentó' que tengan la opción 'Considerar Costo de Capacitación' activada.")
-    if 'tabla_personal' not in datos_hecho or not isinstance(datos_hecho['tabla_personal'], list): datos_hecho['tabla_personal'] = [{'Perfil': 'Encargado SIGERSOL', 'Descripción': 'Responsable registro/presentación', 'Cantidad': 1}]
-    df_personal = pd.DataFrame(datos_hecho['tabla_personal'])
-    edited_df = st.data_editor( df_personal, num_rows="dynamic", key=f"data_editor_personal_{i}", hide_index=True, use_container_width=True, column_config={ "Perfil": st.column_config.TextColumn(required=True), "Descripción": st.column_config.TextColumn(width="large"), "Cantidad": st.column_config.NumberColumn(min_value=0, step=1, required=True), } )
-    datos_hecho['tabla_personal'] = edited_df.to_dict('records')
-    cant_num = [pd.to_numeric(p.get('Cantidad'), errors='coerce') for p in datos_hecho['tabla_personal']]
-    total_pers = pd.Series(cant_num).fillna(0).sum()
-    datos_hecho['num_personal_capacitacion'] = int(total_pers)
-    st.metric("Total de Personal a Capacitar", f"{datos_hecho['num_personal_capacitacion']} persona(s)")
-    st.divider()
+    # --- INICIO CAMBIO 1: Autorelleno y Ubicación de Personal ---
+    if 'tabla_personal' not in datos_hecho or not isinstance(datos_hecho['tabla_personal'], list):
+        datos_hecho['tabla_personal'] = [
+    {
+        'Perfil': 'Gerente General', 
+        'Descripción': (
+            "El Gerente General se encuentra encargado de:\n"
+            "- Planear, dirigir y aprobar los objetivos y metas inherentes a las actividades administrativas, operativas y financieras de la empresa.\n"
+            "- Administrar los recursos materiales, económicos y tecnológicos de la empresa.\n"
+            "- Supervisar, monitorear y evaluar el desarrollo de los procesos y sistemas que se lleva a cabo en la empresa.\n"
+            "Planificar, organizar y mantener canales de comunicación que garanticen la aplicación de las disposiciones necesarias para el cumplimiento de los objetivos de la empresa."
+        ), 
+        'Cantidad': 1
+    },
+    {
+        'Perfil': 'Jefe de Seguridad, Salud Ocupacional y Medio Ambiente', 
+        'Descripción': ("El Jefe de Seguridad, Salud Ocupacional y Medio Ambiente se encuentra encargado de:\n"
+                        "- Implementar y gestionar el Sistema de Seguridad, Salud Ocupacional y Medio Ambiente y supervisar la correcta ejecución de las políticas, planes y actividades establecidas en el marco de la legislación vigente.\n"
+                        "- Elaborar el Plan y Programa Anual de Seguridad, Salud y Medio ambiente en el Trabajo, según la normativa vigente.\n"
+                        "- Elaborar el programa anual de entrenamiento y capacitación en temas de seguridad, salud y medio ambiente.\n"
+                        "- Diseñar, implementar y liderar la ejecución del plan de auditorías e inspecciones tanto internas como externas en materia de Seguridad, Salud Ocupacional y Medio Ambiente."
+                        ), 
+        'Cantidad': 1
+    }
+]
 
-    # --- SECCIÓN 2: EXTREMOS DE INCUMPLIMIENTO (Req 1, 4) ---
-    st.markdown("###### **2. Manifiestos no presentados (Extremos)**")
+    st.markdown("###### **Extremos del incumplimiento**")
     if 'extremos' not in datos_hecho: datos_hecho['extremos'] = [{}]
     if st.button("➕ Añadir Extremo", key=f"add_extremo_{i}"): datos_hecho['extremos'].append({}); st.rerun()
 
@@ -298,78 +316,47 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
         with st.container(border=True):
             st.markdown(f"**Extremo n.° {j + 1}**")
 
-            # --- INICIO REQ 4: Inputs de Año y Trimestre ---
             col_anio, col_trim, col_tipo = st.columns(3)
             with col_anio:
                 anio_actual = date.today().year
-                extremo['anio'] = st.number_input(
-                    "Año", 
-                    min_value=2000, 
-                    max_value=anio_actual, 
-                    step=1, 
-                    key=f"anio_{i}_{j}", 
-                    value=extremo.get('anio', anio_actual)
-                )
+                extremo['anio'] = st.number_input("Año", min_value=2000, max_value=anio_actual, step=1, key=f"anio_{i}_{j}", value=extremo.get('anio', anio_actual))
             with col_trim:
                 trimestres = ["Trimestre 1 (Ene-Mar)", "Trimestre 2 (Abr-Jun)", "Trimestre 3 (Jul-Sep)", "Trimestre 4 (Oct-Dic)"]
-                extremo['trimestre'] = st.selectbox(
-                    "Trimestre",
-                    trimestres,
-                    key=f"trimestre_{i}_{j}",
-                    index=trimestres.index(extremo.get('trimestre')) if extremo.get('trimestre') in trimestres else None,
-                    placeholder="Seleccione..."
-                )
+                extremo['trimestre'] = st.selectbox("Trimestre", trimestres, key=f"trimestre_{i}_{j}", index=trimestres.index(extremo.get('trimestre')) if extremo.get('trimestre') in trimestres else None, placeholder="Seleccione...")
             with col_tipo:
-                tipo_extremo = st.radio(
-                    "Tipo de incumplimiento", 
-                    ["No presentó", "Presentó fuera de plazo"], 
-                    key=f"tipo_extremo_{i}_{j}", 
-                    index=0 if extremo.get('tipo_extremo') == "No presentó" else 1 if extremo.get('tipo_extremo') == "Presentó fuera de plazo" else None, 
-                    horizontal=True
-                )
+                tipo_extremo = st.radio("Tipo de incumplimiento", ["No presentó", "Presentó fuera de plazo"], key=f"tipo_extremo_{i}_{j}", index=0 if extremo.get('tipo_extremo') == "No presentó" else 1 if extremo.get('tipo_extremo') == "Presentó fuera de plazo" else None, horizontal=True)
                 extremo['tipo_extremo'] = tipo_extremo
-            # --- FIN REQ 4 ---
 
-            # --- INICIO DE LA ADICIÓN ---
-            # Mostrar radio condicional para CE2
-            if tipo_extremo == "No presentó":
-                extremo['incluir_capacitacion'] = st.radio(
-                    "¿Considerar Costo de Capacitación (CE2)?",
-                    ["Sí", "No"],
-                    key=f"incluir_cap_{i}_{j}",
-                    index=0 if extremo.get('incluir_capacitacion', 'Sí') == 'Sí' else 1, # Default "Sí"
-                    horizontal=True,
-                    help="Si se marca 'No', el BI se calculará solo con el CE1 (Remisión)."
-                )
-            else:
-                extremo['incluir_capacitacion'] = "No" # No aplica para "Fuera de plazo"
-            # --- FIN DE LA ADICIÓN ---
+            # Eliminada la opción de considerar capacitación Sí/No (ahora es automático por tipo)
 
-            # --- Lógica de cálculo automático de fechas ---
             if extremo.get('anio') and extremo.get('trimestre'):
                 fecha_max, fecha_inc = _calcular_fechas_manifiesto(extremo['anio'], extremo['trimestre'], df_dias_no_laborables)
                 extremo['fecha_maxima_presentacion'] = fecha_max
                 extremo['fecha_incumplimiento'] = fecha_inc
-                
-                col_metric_1, col_metric_2 = st.columns(2)
-                with col_metric_1:
-                    st.metric("Fecha Máxima de Presentación", fecha_max.strftime('%d/%m/%Y') if fecha_max else "N/A")
-                with col_metric_2:
-                    st.metric("Fecha de Incumplimiento", fecha_inc.strftime('%d/%m/%Y') if fecha_inc else "N/A")
-            else:
-                extremo['fecha_maxima_presentacion'] = None
-                extremo['fecha_incumplimiento'] = None
+                col_m1, col_m2 = st.columns(2)
+                with col_m1: st.metric("Fecha Límite", fecha_max.strftime('%d/%m/%Y'))
+                with col_m2: st.metric("Fecha Incumplimiento", fecha_inc.strftime('%d/%m/%Y'))
             
-            # Input condicional Fecha Extemporánea
             if tipo_extremo == "Presentó fuera de plazo":
                 fecha_inc_actual = extremo.get('fecha_incumplimiento')
                 min_fecha_ext = fecha_inc_actual if fecha_inc_actual else date.today()
-                extremo['fecha_extemporanea'] = st.date_input("Fecha de cumplimiento extemporáneo", min_value=min_fecha_ext, key=f"fecha_ext_{i}_{j}", value=extremo.get('fecha_extemporanea'), format="DD/MM/YYYY")
-            else: 
-                extremo['fecha_extemporanea'] = None
+                extremo['fecha_extemporanea'] = st.date_input("Fecha cumplimiento extemporáneo", min_value=min_fecha_ext, key=f"fecha_ext_{i}_{j}", value=extremo.get('fecha_extemporanea'), format="DD/MM/YYYY")
 
-            if st.button(f"🗑️", key=f"del_extremo_{i}_{j}", help="Eliminar Extremo"): datos_hecho['extremos'].pop(j); st.rerun()
+            # --- TABLA DE PERSONAL INTEGRADA ---
+            st.divider()
+            st.markdown("###### **Personal a capacitar (CE2)**")
+            df_personal = pd.DataFrame(datos_hecho['tabla_personal'])
+            if j == 0:
+                edited_df = st.data_editor(df_personal, num_rows="dynamic", key=f"data_editor_personal_{i}_{j}", hide_index=True, use_container_width=True, column_config={"Perfil": st.column_config.TextColumn(required=True), "Descripción": st.column_config.TextColumn(width="large"), "Cantidad": st.column_config.NumberColumn(min_value=0, step=1, required=True, format="%d")})
+                datos_hecho['tabla_personal'] = edited_df.to_dict('records')
+            else:
+                st.dataframe(df_personal, use_container_width=True, hide_index=True)
 
+            cant_num = [pd.to_numeric(p.get('Cantidad'), errors='coerce') for p in datos_hecho['tabla_personal']]
+            datos_hecho['num_personal_capacitacion'] = int(pd.Series(cant_num).fillna(0).sum())
+            if j == 0: st.metric("Total de Personal", f"{datos_hecho['num_personal_capacitacion']}")
+
+            if st.button(f"🗑️ Eliminar", key=f"del_extremo_{i}_{j}"): datos_hecho['extremos'].pop(j); st.rerun()
     return datos_hecho
 
 # ---------------------------------------------------------------------
@@ -379,29 +366,27 @@ def validar_inputs(datos_hecho):
     """
     Valida inputs de INF007 (Manifiestos).
     """
-    # 1. Validar CE2 (Global)
-    if not datos_hecho.get('num_personal_capacitacion', 0) > 0: return False
+    # 1. Validar que haya personal (dato global del hecho)
+    if not datos_hecho.get('num_personal_capacitacion', 0) > 0: 
+        return False
 
-    # 2. Validar Extremos
-    if not datos_hecho.get('extremos'): return False
+    # 2. Validar que exista al menos un extremo
+    if not datos_hecho.get('extremos'): 
+        return False
 
-    for j, extremo in enumerate(datos_hecho.get('extremos', [])):
-        # Validar campos básicos del extremo
+    for extremo in datos_hecho.get('extremos', []):
+        # 3. Validar campos obligatorios de cada extremo
         if not all([
             extremo.get('anio'),
             extremo.get('trimestre'),
-            extremo.get('fecha_incumplimiento'), # Asegura que las fechas se calcularon
+            extremo.get('fecha_incumplimiento'),
             extremo.get('tipo_extremo')
-        ]): return False
+        ]): 
+            return False
 
-        # --- INICIO DE LA ADICIÓN ---
-        # Validar el nuevo radio si el tipo es "No presentó"
-        if extremo.get('tipo_extremo') == "No presentó":
-            if not extremo.get('incluir_capacitacion'): # Si es None o "", es inválido
-                return False
-        # --- FIN DE LA ADICIÓN ---
-        # Validar campo condicional
-        if extremo.get('tipo_extremo') == "Presentó fuera de plazo" and not extremo.get('fecha_extemporanea'): return False
+        # 4. Validar fecha extemporánea si corresponde
+        if extremo.get('tipo_extremo') == "Presentó fuera de plazo" and not extremo.get('fecha_extemporanea'): 
+            return False
 
     return True
 
@@ -446,12 +431,26 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         label_ce_principal = "CE1" if aplicar_capacitacion else "CE"
 
         # 3. Calcular BI y Multa
-        tipo_inc, fecha_inc, fecha_ext = extremo.get('tipo_extremo'), extremo.get('fecha_incumplimiento'), extremo.get('fecha_extemporanea')
+        # 3. Calcular BI y Multa
+        tipo_inc = extremo.get('tipo_extremo')
+        fecha_inc = extremo.get('fecha_incumplimiento')
+        fecha_ext = extremo.get('fecha_extemporanea')
+        
+        # --- DEFINICIÓN ANTICIPADA PARA EVITAR EL ERROR ---
+        es_ext = (tipo_inc == "Presentó fuera de plazo")
+        # --------------------------------------------------
+
         texto_bi = f"{datos_hecho.get('texto_hecho', 'Hecho no especificado')}"
         datos_bi_base = {**datos_comunes, 'ce_soles': res_ce['ce_soles_para_bi'], 'ce_dolares': res_ce['ce_dolares_para_bi'], 'fecha_incumplimiento': fecha_inc, 'texto_del_hecho': texto_bi}
         res_bi = calcular_beneficio_ilicito_extemporaneo({**datos_bi_base, 'fecha_cumplimiento_extemporaneo': fecha_ext, **calcular_beneficio_ilicito(datos_bi_base)}) if tipo_inc == "Presentó fuera de plazo" else calcular_beneficio_ilicito(datos_bi_base)
         if not res_bi or res_bi.get('error'): return res_bi or {'error': 'Error BI.'}
         bi_uit = res_bi.get('beneficio_ilicito_uit', 0)
+
+        # --- INICIO: Lógica de Moneda (Basado en INF004) ---
+        moneda_calculo = res_bi.get('moneda_cos', 'USD') 
+        es_dolares = (moneda_calculo == 'USD')
+        texto_moneda_bi = "moneda extranjera (Dólares)" if es_dolares else "moneda nacional (Soles)"
+        ph_bi_abreviatura_moneda = "US$" if es_dolares else "S/"
         res_multa = calcular_multa({**datos_comunes, 'beneficio_ilicito': bi_uit})
         multa_uit = res_multa.get('multa_final_uit', 0)
 
@@ -526,24 +525,35 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             tabla_ce2 = create_table_subdoc(doc_tpl_bi, ["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste 2/", "Monto (*) (S/)", "Monto (*) (US$) 3/"],
                                           ce2_fmt, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
         
-        # --- Formato BI (con superíndices) ---
-        filas_bi_crudas, fn_map, fn_data = res_bi.get('table_rows', []), res_bi.get('footnote_mapping', {}), res_bi.get('footnote_data', {})
-        es_ext = (tipo_inc == "Presentó fuera de plazo")
-        fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion, es_ext)}" for l, k in sorted(fn_map.items())]
-        fn_data_dict = {'list': fn_list, 'elaboration': 'Elaboración: '
-        'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+        # --- SOLUCIÓN: Compactar y Reordenar Notas al Pie de BI ---
+        filas_bi_crudas = res_bi.get('table_rows', [])
+        fn_map_orig = res_bi.get('footnote_mapping', {})
+        fn_data = res_bi.get('footnote_data', {})
+        
+        letras_usadas = sorted(list({r for f in filas_bi_crudas if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+        letras_base = "abcdefghijklmnopqrstuvwxyz"
+        map_traduccion = {v: letras_base[i] for i, v in enumerate(letras_usadas)}
+        nuevo_fn_map = {map_traduccion[v]: fn_map_orig[v] for v in letras_usadas if v in fn_map_orig}
+
         filas_bi_para_tabla = []
         for fila in filas_bi_crudas:
             nueva_fila = fila.copy()
-            ref_letra = nueva_fila.get('ref')
-            texto_base = str(nueva_fila.get('descripcion_texto', ''))
-            super_existente = str(nueva_fila.get('descripcion_superindice', ''))
-            if ref_letra: super_existente += f"({ref_letra})"
-            nueva_fila['descripcion_texto'] = texto_base
-            nueva_fila['descripcion_superindice'] = super_existente
-            filas_bi_para_tabla.append(nueva_fila)
-        tabla_bi = create_main_table_subdoc(doc_tpl_bi, ["Descripción", "Monto"], filas_bi_para_tabla, keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict, column_widths=(5, 1))
+            ref_orig = nueva_fila.get('ref', '')
+            super_final = str(nueva_fila.get('descripcion_superindice', ''))
+            if ref_orig:
+                nuevas = [map_traduccion[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion]
+                if nuevas: super_final += f"({', '.join(nuevas)})"
+            
+            filas_bi_para_tabla.append({
+                'descripcion_texto': fila.get('descripcion_texto', ''),
+                'descripcion_superindice': super_final,
+                'monto': fila.get('monto', '')
+            })
 
+        fn_list = [f"({l}) {obtener_fuente_formateada(k, fn_data, id_infraccion, es_ext)}" for l, k in sorted(nuevo_fn_map.items())]
+        fn_data_dict = {'list': fn_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+        
+        tabla_bi = create_main_table_subdoc(doc_tpl_bi, ["Descripción", "Monto"], filas_bi_para_tabla, keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict, column_widths=(5, 1))
         # --- Formato Multa ---
         tabla_multa = create_main_table_subdoc(doc_tpl_bi, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'], texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.", estilo_texto_posterior='FuenteTabla', column_widths=(5, 1))
 
@@ -589,10 +599,9 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
 
         # 5. Contexto y Renderizado Cuerpo
         fuentes_ce = res_ce.get('fuentes', {})
-        # --- AÑADIR ESTA LÍNEA ---
-        es_ext = (tipo_inc == "Presentó fuera de plazo")
         contexto_word = {
             **datos_comunes['context_data'],
+            'ph_anexo_ce_num': "3" if datos_hecho.get('aplica_graduacion') == 'Sí' else "2",
             **fuentes_ce.get('ce1', {}).get('placeholders_dinamicos', {}), # Placeholders dinámicos de CE1
             'acronyms': datos_comunes['acronym_manager'],
             'es_extemporaneo': es_ext,
@@ -642,6 +651,9 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'se_aplica_tope': se_aplica_tope, # Booleano para {% if %}
             'tope_multa_uit': f"{tope_multa_uit:,.3f} UIT", # Valor del tope
             # --- FIN: (REQ 1) ---
+            'bi_moneda_es_dolares': es_dolares,
+            'ph_bi_moneda_texto': texto_moneda_bi,
+            'ph_bi_moneda_simbolo': ph_bi_abreviatura_moneda,
         }
         doc_tpl_bi.render(contexto_word, autoescape=True, jinja_env=jinja_env)
         buf_final_hecho = io.BytesIO()
