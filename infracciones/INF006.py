@@ -26,7 +26,7 @@ except ImportError:
         return {'error': 'Módulo de cálculo de capacitación no encontrado.'}
 
 # --- 2. INTERFAZ DE USUARIO (Adaptada al estilo INF003) ---
-def renderizar_inputs_especificos(i):
+def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
     """
     Renderiza la interfaz para INF006:
     1. Lista dinámica de extremos, pidiendo la fecha de presentación de info. falsa.
@@ -36,11 +36,11 @@ def renderizar_inputs_especificos(i):
     datos_hecho = st.session_state.imputaciones_data[i] # Acceder a los datos de este hecho
 
     # --- SECCIÓN 1: EXTREMOS DEL INCUMPLIMIENTO ---
-    st.markdown("###### **1. Fechas de Presentación de Información Falsa (Extremos)**")
+    st.markdown("###### **Extremos del incumplimiento**")
     
     # Inicializar lista de personal y extremos si no existen
     if 'tabla_personal' not in datos_hecho or not isinstance(datos_hecho['tabla_personal'], list):
-        datos_hecho['tabla_personal'] = [{'Perfil': 'Personal operativo', 'Descripción': 'Involucrado en la generación/presentación de información', 'Cantidad': 1}]
+        datos_hecho['tabla_personal'] = [{'Perfil': 'Gerente General', 'Descripción': 'Se considera la capacitación del Gerente General, dada su responsabilidad directa en la toma de decisiones estratégicas y el cumplimiento de las obligaciones legales de la empresa. Como máxima autoridad, su conocimiento en gestión ambiental y normativas aplicables es fundamental para garantizar que la documentación presentada a las autoridades sea veraz y cumpla con los estándares exigidos, minimizando así el riesgo de futuras infracciones.', 'Cantidad': 1}]
     if 'extremos' not in datos_hecho: 
         datos_hecho['extremos'] = [{}]
 
@@ -59,7 +59,7 @@ def renderizar_inputs_especificos(i):
             with col1:
                 # --- CAMBIO CLAVE: Etiqueta de la Fecha ---
                 fecha_presentacion_falsa = st.date_input(
-                    f"Fecha Presentación Info. Falsa (Extremo n.° {j + 1})", # Etiqueta específica de INF006
+                    f"Fecha de presentación de la información falsa", # Etiqueta específica de INF006
                     key=f"fecha_presentacion_falsa_{i}_{j}", # Clave única
                     value=extremo.get('fecha_incumplimiento'), # Guardar en 'fecha_incumplimiento'
                     format="DD/MM/YYYY",
@@ -71,9 +71,9 @@ def renderizar_inputs_especificos(i):
             with col_display:
                 if extremo.get('fecha_incumplimiento'):
                     fecha_str = extremo['fecha_incumplimiento'].strftime('%d/%m/%Y')
-                    st.metric(label="Fecha Incumplimiento", value=fecha_str) # <-- Estilo métrica
+                    st.metric(label="Fecha de incumplimiento", value=fecha_str) # <-- Estilo métrica
                 else:
-                    st.metric(label="Fecha Incumplimiento", value="---")
+                    st.metric(label="Fecha de incumplimiento", value="---")
 
             with col_button:
                 if len(datos_hecho['extremos']) > 1:
@@ -86,7 +86,7 @@ def renderizar_inputs_especificos(i):
             st.divider() 
             
             # --- SECCIÓN 2: DATOS DE CAPACITACIÓN (Anidada) ---
-            st.markdown("###### **Personal a capacitar (ingresado en el primer extremo)**")
+            st.markdown("###### **Personal a capacitar**")
 
             df_personal = pd.DataFrame(datos_hecho['tabla_personal'])
 

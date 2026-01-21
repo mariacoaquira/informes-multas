@@ -146,25 +146,23 @@ def _calcular_costo_evitado_inf001(datos_comunes, datos_hecho_general, extremo_d
                         idx_anio = df_ind[df_ind['Indice_Mes'].dt.year == fecha_f.year]
                         ipc_cost, tc_cost = (float(idx_anio['IPC_Mensual'].mean()), float(idx_anio['TC_Mensual'].mean())) if not idx_anio.empty else (0,0)
                         
-                        # --- CORRECCIÓN 1: Capturar Fuente Salario SIEMPRE ---
                         f_row = df_sal[df_sal['ID_Salario']==id_gen]
                         if not f_row.empty:
                              fuentes_ce1['fuente_salario'] = f_row.iloc[0].get('Fuente_Salario','')
                              fuentes_ce1['pdf_salario'] = f_row.iloc[0].get('PDF_Salario','')
-                        # -----------------------------------------------------
-                             
+                             # --- NUEVO: Placeholder IPC Promedio Salario ---
+                             fuentes_ce1['texto_ipc_costeo_salario'] = f"Promedio {fecha_f.year}, IPC = {ipc_cost:,.6f}"     
                     elif pd.notna(id_gen) and 'COT' in id_gen:
                          idx_row = df_ind[df_ind['Indice_Mes'].dt.to_period('M') == fecha_f.to_period('M')]
                          ipc_cost, tc_cost = (float(idx_row.iloc[0]['IPC_Mensual']), float(idx_row.iloc[0]['TC_Mensual'])) if not idx_row.empty else (0,0)
                     
                     if ipc_cost == 0: continue
 
-                    # --- CORRECCIÓN 2: Capturar Sustento Profesional SIEMPRE (si existe) ---
-                    sustento_txt = costo_final.get('Sustento_Item')
-                    if pd.notna(sustento_txt) and str(sustento_txt).strip():
-                        fuentes_ce1['sustento_item_profesional'] = str(sustento_txt).strip()
-                    # -----------------------------------------------------------------------
-
+                    # --- CORRECCIÓN 2: Solo capturar si es el ítem Profesional ---
+                    if 'Profesional' in desc_item:
+                        sustento_txt = costo_final.get('Sustento_Item')
+                        if pd.notna(sustento_txt) and str(sustento_txt).strip():
+                            fuentes_ce1['sustento_item_profesional'] = str(sustento_txt).strip()
                     # Cálculo de Montos
                     costo_orig = float(costo_final.get('Costo_Unitario_Item', 0.0))
                     moneda = costo_final.get('Moneda_Item')
@@ -279,39 +277,110 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
     st.markdown("##### Detalles de la No Presentación del IAA (INF001)")
     datos_hecho = st.session_state.imputaciones_data[i]
 
-    st.markdown("###### **1. Personal a capacitar (CE2)**")
-    if 'tabla_personal' not in datos_hecho or not isinstance(datos_hecho['tabla_personal'], list):
-        datos_hecho['tabla_personal'] = [
-            # Fila 1 por defecto
-            {'Perfil': 'Ingeniero Ambiental', 'Descripción': 'Encargado de Medio Ambiente', 'Cantidad': 1},
-            # Fila 2 por defecto (Opcional)
-            {'Perfil': 'Técnico de Campo', 'Descripción': 'Apoyo en monitoreo', 'Cantidad': 1}
-        ]
-    df_personal = pd.DataFrame(datos_hecho['tabla_personal']); edited_df = st.data_editor( df_personal, num_rows="dynamic", key=f"data_editor_personal_{i}", hide_index=True, use_container_width=True, column_config={ "Perfil": st.column_config.TextColumn(required=True), "Descripción": st.column_config.TextColumn(width="large"), "Cantidad": st.column_config.NumberColumn(min_value=0, step=1, required=True, format="%d"), } )
-    datos_hecho['tabla_personal'] = edited_df.to_dict('records'); cant_num = [pd.to_numeric(p.get('Cantidad'), errors='coerce') for p in datos_hecho['tabla_personal']]; total_pers = pd.Series(cant_num).fillna(0).sum()
-    datos_hecho['num_personal_capacitacion'] = int(total_pers); st.metric("Total de Personal", f"{datos_hecho['num_personal_capacitacion']}"); st.divider()
-
-    st.markdown("###### **2. Registro de Incumplimientos (Extremos)**")
+    st.markdown("###### **" \
+    "Extremos del incumplimiento**")
     if 'extremos' not in datos_hecho: datos_hecho['extremos'] = [{}]
-    if st.button("➕ Añadir Año IAA", key=f"add_extremo_iaa_{i}"): datos_hecho['extremos'].append({}); st.rerun()
+    if st.button("➕ Añadir Extremo", key=f"add_extremo_iaa_{i}"): datos_hecho['extremos'].append({}); st.rerun()
 
     for j, extremo in enumerate(datos_hecho['extremos']):
         with st.container(border=True):
             st.markdown(f"**Año IAA n.° {j + 1}**")
-            extremo['anio_iaa'] = st.number_input("Año del IAA", min_value=2000, max_value=date.today().year, step=1, key=f"anio_iaa_{i}_{j}", value=extremo.get('anio_iaa', date.today().year - 1))
-            col_fecha_max, col_fecha_inc = st.columns(2)
-            with col_fecha_max:
-                fecha_max_input = st.date_input(f"Fecha máxima presentación IAA {extremo['anio_iaa']}", key=f"fecha_max_{i}_{j}", value=extremo.get('fecha_maxima_presentacion'), format="DD/MM/YYYY")
-                extremo['fecha_maxima_presentacion'] = fecha_max_input
-            with col_fecha_inc:
-                if fecha_max_input: fecha_inc_calculada = fecha_max_input + timedelta(days=1); extremo['fecha_incumplimiento'] = fecha_inc_calculada; st.metric("Fecha Incumplimiento", fecha_inc_calculada.strftime('%d/%m/%Y'))
-                else: extremo['fecha_incumplimiento'] = None
-            tipo_presentacion = st.radio( "Tipo de presentación", ["No presentó", "Presentó incompleto"], key=f"tipo_presentacion_iaa_{i}_{j}", index=0 if extremo.get('tipo_presentacion') == "No presentó" else 1, horizontal=True)
+            
+            # --- PARTE A: FECHAS AUTOMÁTICAS ---
+            col_anio, col_metrica = st.columns([2, 2])
+            with col_anio:
+                anio_iaa = st.number_input(
+                    "Año correpsondiente al IAA", 
+                    min_value=2000, max_value=date.today().year, step=1, 
+                    key=f"anio_iaa_{i}_{j}", 
+                    value=extremo.get('anio_iaa', date.today().year - 1)
+                )
+                extremo['anio_iaa'] = anio_iaa
+                fecha_max_calc = date(anio_iaa + 1, 3, 30)
+                fecha_inc_calc = date(anio_iaa + 1, 3, 31)
+                extremo['fecha_maxima_presentacion'] = fecha_max_calc
+                extremo['fecha_incumplimiento'] = fecha_inc_calc
+
+            with col_metrica:
+                st.info(f"**Fecha límite de presentación:** {fecha_max_calc.strftime('%d/%m/%Y')}\n\n**Fecha de incumplimiento:** {fecha_inc_calc.strftime('%d/%m/%Y')}")
+
+            tipo_presentacion = st.radio(
+                "Tipo de presentación", ["No presentó", "Presentó incompleto"], 
+                key=f"tipo_presentacion_iaa_{i}_{j}", 
+                index=0 if extremo.get('tipo_presentacion') == "No presentó" else 1, horizontal=True
+            )
             extremo['tipo_presentacion'] = tipo_presentacion
+            
             if tipo_presentacion == "Presentó incompleto":
-                extremo['num_secciones_faltantes'] = st.number_input( "Secciones faltantes (de 12)", min_value=1, max_value=12, step=1, key=f"num_secciones_{i}_{j}", value=extremo.get('num_secciones_faltantes', 1))
-            else: extremo['num_secciones_faltantes'] = 12
-            if st.button(f"🗑️", key=f"del_extremo_{i}_{j}"): datos_hecho['extremos'].pop(j); st.rerun()
+                extremo['num_secciones_faltantes'] = st.number_input(
+                    "Secciones faltantes/incompletas (de 12)", min_value=1, max_value=12, step=1, 
+                    key=f"num_secciones_{i}_{j}", value=extremo.get('num_secciones_faltantes', 1)
+                )
+            else:
+                extremo['num_secciones_faltantes'] = 12
+
+            # --- PARTE B: TABLA DE PERSONAL (DENTRO DEL BLOQUE) ---
+            st.divider()
+            st.markdown("###### **Personal a capacitar (CE2)**")
+            
+            # Asegurar inicialización (Autorelleno)
+            if 'tabla_personal' not in datos_hecho:
+                datos_hecho['tabla_personal'] = [
+            {
+                'Perfil': 'Gerente General', 
+                'Descripción': (
+                    "El Gerente General se encuentra encargado de:\n"
+                    "- Planear, dirigir y aprobar los objetivos y metas inherentes a las actividades administrativas, operativas y financieras de la empresa.\n"
+                    "- Administrar los recursos materiales, económicos y tecnológicos de la empresa.\n"
+                    "- Supervisar, monitorear y evaluar el desarrollo de los procesos y sistemas que se lleva a cabo en la empresa.\n"
+                    "Planificar, organizar y mantener canales de comunicación que garanticen la aplicación de las disposiciones necesarias para el cumplimiento de los objetivos de la empresa."
+                ), 
+                'Cantidad': 1
+            },
+            {
+                'Perfil': 'Jefe de Seguridad, Salud Ocupacional y Medio Ambiente', 
+                'Descripción': ("El Jefe de Seguridad, Salud Ocupacional y Medio Ambiente se encuentra encargado de:\n"
+                                "- Implementar y gestionar el Sistema de Seguridad, Salud Ocupacional y Medio Ambiente y supervisar la correcta ejecución de las políticas, planes y actividades establecidas en el marco de la legislación vigente.\n"
+                                "- Elaborar el Plan y Programa Anual de Seguridad, Salud y Medio ambiente en el Trabajo, según la normativa vigente.\n"
+                                "- Elaborar el programa anual de entrenamiento y capacitación en temas de seguridad, salud y medio ambiente.\n"
+                                "- Diseñar, implementar y liderar la ejecución del plan de auditorías e inspecciones tanto internas como externas en materia de Seguridad, Salud Ocupacional y Medio Ambiente."
+                                ), 
+                'Cantidad': 1
+            }
+        ]
+
+            df_personal = pd.DataFrame(datos_hecho['tabla_personal'])
+
+            if j == 0:
+                # Solo el primer extremo permite editar (evita llaves duplicadas y conflictos de datos)
+                edited_df = st.data_editor(
+                    df_personal,
+                    num_rows="dynamic",
+                    key=f"data_editor_personal_{i}_{j}", # <--- LLAVE ÚNICA CON {j}
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "Perfil": st.column_config.TextColumn(required=True),
+                        "Descripción": st.column_config.TextColumn(width="large"),
+                        "Cantidad": st.column_config.NumberColumn(min_value=0, step=1, required=True, format="%d"),
+                    }
+                )
+                datos_hecho['tabla_personal'] = edited_df.to_dict('records')
+            else:
+                # Los demás extremos muestran la tabla como solo lectura
+                st.dataframe(df_personal, use_container_width=True, hide_index=True)
+
+            # Cálculo de totales
+            cant_num = [pd.to_numeric(p.get('Cantidad'), errors='coerce') for p in datos_hecho['tabla_personal']]
+            total_pers = int(pd.Series(cant_num).fillna(0).sum())
+            datos_hecho['num_personal_capacitacion'] = total_pers
+            
+            if j == 0:
+                st.metric("Total de Personal a Capacitar", f"{total_pers}")
+
+            if st.button(f"🗑️ Eliminar IAA {extremo.get('anio_iaa')}", key=f"del_extremo_{i}_{j}"):
+                datos_hecho['extremos'].pop(j)
+                st.rerun()
     return datos_hecho
 
 # --- 3. VALIDACIÓN ---
@@ -421,9 +490,9 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         
         # --- Formatear datos CE1 (con estructura INF008) ---
         ce1_fmt = []
-        for item in res_ce['ce1_data_raw']:
+        for idx, item in enumerate(res_ce['ce1_data_raw'], 1):
             ce1_fmt.append({
-                'descripcion': item.get('descripcion', ''),
+                'descripcion': f"{item.get('descripcion', '')} {idx}/",
                 'cantidad': format_decimal_dinamico(item.get('cantidad', 0)),
                 'horas': format_decimal_dinamico(item.get('horas', 0)),
                 'unidad': item.get('unidad', ''),
@@ -465,7 +534,7 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             ce2_fmt = []
             for item in res_ce['ce2_data_raw']:
                 ce2_fmt.append({
-                    'descripcion': item.get('descripcion', ''),
+                    'descripcion': f"{item.get('descripcion', '')} 1/",
                     'precio_dolares': f"US$ {item.get('precio_dolares', 0):,.3f}",
                     'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}",
                     'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
@@ -473,7 +542,7 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
                     'monto_dolares': f"US$ {item.get('monto_dolares', 0):,.3f}"
                 })
             ce2_fmt.append({
-                'descripcion': 'Subtotal CE2', 
+                'descripcion': 'Total', 
                 'monto_soles': f"S/ {res_ce['ce2_soles_calculado']:,.3f}", 
                 'monto_dolares': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}"
             })
@@ -537,7 +606,11 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         # 5. Contexto Final
         fuentes_ce = res_ce.get('fuentes', {})
         contexto_word = {
-            **datos_comunes['context_data'], 'acronyms': datos_comunes['acronym_manager'],
+            **datos_comunes['context_data'], 
+            'es_no_presento': tipo_pres == "No presentó", # <--- Condicional requerido
+            'ph_ipc_promedio_salario_ce1': fuentes_ce.get('ce1', {}).get('texto_ipc_costeo_salario', ''), # <--- IPC Salario
+            # ... resto de campos
+            'acronyms': datos_comunes['acronym_manager'],
             'hecho': {'numero_imputado': datos_comunes['numero_hecho_actual'], 'descripcion': RichText(datos_hecho.get('texto_hecho', ''))},
             'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual'] + 1}",
             'tipo_presentacion_iaa': tipo_pres, 
@@ -604,6 +677,8 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'fuente_salario_ce1': fuentes_ce.get('ce1', {}).get('fuente_salario', ''),
             'pdf_salario_ce1': fuentes_ce.get('ce1', {}).get('pdf_salario', ''),
             'sustento_prof_ce1': fuentes_ce.get('ce1', {}).get('sustento_item_profesional', ''),
+            'ph_ipc_promedio_salario_ce1': fuentes_ce.get('ce1', {}).get('texto_ipc_costeo_salario', ''), # <--- Añadir aquí también
+            # ...,
             'fuente_coti_ce1': fuentes_ce.get('ce1', {}).get('fuente_coti', ''),
             'fuente_salario_ce2': fuentes_ce.get('ce2', {}).get('fuente_salario', ''),
             'pdf_salario_ce2': fuentes_ce.get('ce2', {}).get('pdf_salario', ''),
@@ -766,7 +841,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             tabla_ce1_anx = create_table_subdoc(tpl_anx_loop, ["Desc", "Cant", "Horas", "P.Base(S/)", "F.Ajuste", "Monto(S/)"], ce1_fmt_anx, ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles'])
             tabla_ce2_anx = None
             if res_ce['ce2_data_raw']: 
-                ce2_fmt_anx = [{**item, 'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}"} for item in res_ce['ce2_data_raw']] + [{'descripcion':'Subtotal CE2', 'monto_soles':f"S/ {res_ce['ce2_soles_calculado']:,.3f}"}]
+                ce2_fmt_anx = [{**item, 'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}"} for item in res_ce['ce2_data_raw']] + [{'descripcion':'Total', 'monto_soles':f"S/ {res_ce['ce2_soles_calculado']:,.3f}"}]
                 tabla_ce2_anx = create_table_subdoc(tpl_anx_loop, ["Desc", "P.Base(S/)", "F.Ajuste", "Monto(S/)"], ce2_fmt_anx, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles'])
             
             fuentes_ce = res_ce.get('fuentes', {})
@@ -786,7 +861,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             tabla_ce1_cuerpo = create_table_subdoc(tpl_principal, ["Desc", "Cant", "Horas", "P.Base(S/)", "F.Ajuste", "Monto(S/)"], ce1_fmt_anx, ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles'])
             tabla_ce2_cuerpo = None
             if aplicar_ce2_bi_extremo and res_ce['ce2_data_raw']:
-                ce2_fmt_cuerpo = [{**item, 'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}"} for item in res_ce['ce2_data_raw']] + [{'descripcion':'Subtotal CE2', 'monto_soles':f"S/ {res_ce['ce2_soles_calculado']:,.3f}"}]
+                ce2_fmt_cuerpo = [{**item, 'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}"} for item in res_ce['ce2_data_raw']] + [{'descripcion':'Total', 'monto_soles':f"S/ {res_ce['ce2_soles_calculado']:,.3f}"}]
                 tabla_ce2_cuerpo = create_table_subdoc(tpl_principal, ["Desc", "P.Base(S/)", "F.Ajuste", "Monto(S/)"], ce2_fmt_cuerpo, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles'])
             
             filas_bi, fn_map, fn_data = res_bi_parcial.get('table_rows', []), res_bi_parcial.get('footnote_mapping', {}), res_bi_parcial.get('footnote_data', {})
