@@ -193,91 +193,51 @@ def _calcular_costo_evitado_extremo_inf009(datos_comunes, extremo_data):
 # ---------------------------------------------------------------------
 
 def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
-    """
-    Renderiza la interfaz para INF009 (Registro Anual).
-    """
     st.markdown("##### Detalles del Incumplimiento: Registro Anual RRSS (INF009)")
     datos_hecho = st.session_state.imputaciones_data[i] 
 
-    # --- INICIO DE LA MODIFICACIÓN: DATOS GENERALES DE SUPERVISIÓN ---
-    st.markdown("###### **1. Datos de la Supervisión Regular**")
-    
-    col_sup1, col_sup2 = st.columns(2)
-    with col_sup1:
-        datos_hecho['fecha_supervision_inicio'] = st.date_input(
-            "Fecha de inicio de supervisión",
-            key=f"sup_inicio_{i}",
-            value=datos_hecho.get('fecha_supervision_inicio'),
-            format="DD/MM/YYYY"
-        )
-    with col_sup2:
-        datos_hecho['fecha_supervision_fin'] = st.date_input(
-            "Fecha de fin de supervisión",
-            key=f"sup_fin_{i}",
-            value=datos_hecho.get('fecha_supervision_fin'),
-            format="DD/MM/YYYY"
-        )
-    st.divider()
-    # --- FIN DE LA MODIFICACIÓN ---
-
-    # --- SECCIÓN 2: EXTREMOS DE INCUMPLIMIENTO ---
-    st.markdown("###### **2. Registros no administrados (Extremos)**")
+    st.markdown("###### **Registros no administrados (Extremos)**")
     if 'extremos' not in datos_hecho: datos_hecho['extremos'] = [{}]
     if st.button("➕ Añadir Extremo", key=f"add_extremo_{i}"): datos_hecho['extremos'].append({}); st.rerun()
 
     for j, extremo in enumerate(datos_hecho['extremos']):
+        # Hardcodeamos el tipo de incumplimiento ya que no hay extemporáneo
+        extremo['tipo_extremo'] = "No contó/administró"
+        
         with st.container(border=True):
             col_titulo, col_boton_eliminar = st.columns([0.85, 0.15])
             with col_titulo:
                 st.markdown(f"**Extremo n.° {j + 1}**")
             with col_boton_eliminar:
-                if st.button(f"🗑️", key=f"del_extremo_{i}_{j}", help="Eliminar Extremo"): datos_hecho['extremos'].pop(j); st.rerun()
+                if st.button(f"🗑️", key=f"del_extremo_{i}_{j}"): datos_hecho['extremos'].pop(j); st.rerun()
 
-            col_anio, col_tipo = st.columns(2)
-            with col_anio:
-                anio_actual = date.today().year
-                extremo['anio'] = st.number_input(
-                    "Año del Registro", 
-                    min_value=2000, 
-                    max_value=anio_actual,
-                    step=1, 
-                    key=f"anio_{i}_{j}", 
-                    value=extremo.get('anio', anio_actual - 1)
-                )
-            with col_tipo:
-                tipo_extremo = st.radio(
-                    "Tipo de incumplimiento", 
-                    ["No contó/administró", "Presentó fuera de plazo"],
-                    key=f"tipo_extremo_{i}_{j}", 
-                    index=0 if extremo.get('tipo_extremo') == "No contó/administró" else 1 if extremo.get('tipo_extremo') == "Presentó fuera de plazo" else None, 
-                    horizontal=True
-                )
-                extremo['tipo_extremo'] = tipo_extremo
+            # 1. Año del registro
+            extremo['anio'] = st.number_input("Año del Registro", min_value=2000, max_value=date.today().year,
+                                             step=1, key=f"anio_{i}_{j}", value=extremo.get('anio', date.today().year - 1))
             
-            # --- INICIO DE LA MODIFICACIÓN: Lógica de Fechas Fijas ---
+            # 2. Fechas de Supervisión (Mantenidas dentro del extremo)
+            st.markdown("---")
+            st.caption("Periodo de supervisión para este registro:")
+            col_sup1, col_sup2 = st.columns(2)
+            with col_sup1:
+                extremo['fecha_supervision_inicio'] = st.date_input("Inicio supervisión", key=f"sup_ini_{i}_{j}",
+                                                                  value=extremo.get('fecha_supervision_inicio'), format="DD/MM/YYYY")
+            with col_sup2:
+                extremo['fecha_supervision_fin'] = st.date_input("Fin supervisión", key=f"sup_fin_{i}_{j}",
+                                                                value=extremo.get('fecha_supervision_fin'), format="DD/MM/YYYY")
+
+            # 3. Lógica de Fechas de Incumplimiento (Fijas)
             if extremo.get('anio'):
-                # USA LA NUEVA FUNCIÓN DE FECHAS FIJAS
                 fecha_max, fecha_inc = _calcular_fechas_registro_inf009(extremo['anio'])
                 extremo['fecha_maxima_presentacion'] = fecha_max
                 extremo['fecha_incumplimiento'] = fecha_inc
                 
-                col_metric_1, col_metric_2 = st.columns(2)
-                with col_metric_1:
-                    st.metric("Fecha Máxima de Presentación", "31/12/{}".format(extremo['anio']) if fecha_max else "N/A")
-                with col_metric_2:
-                    st.metric("Fecha de Incumplimiento", "01/01/{}".format(extremo['anio'] + 1) if fecha_inc else "N/A")
-            else:
-                extremo['fecha_maxima_presentacion'] = None
-                extremo['fecha_incumplimiento'] = None
-            # --- FIN DE LA MODIFICACIÓN ---
-            
-            # Input condicional Fecha Extemporánea
-            if tipo_extremo == "Presentó fuera de plazo":
-                fecha_inc_actual = extremo.get('fecha_incumplimiento')
-                min_fecha_ext = fecha_inc_actual if fecha_inc_actual else date.today()
-                extremo['fecha_extemporanea'] = st.date_input("Fecha de cumplimiento extemporáneo", min_value=min_fecha_ext, key=f"fecha_ext_{i}_{j}", value=extremo.get('fecha_extemporanea'), format="DD/MM/YYYY")
-            else: 
-                extremo['fecha_extemporanea'] = None
+                col_m1, col_m2 = st.columns(2)
+                with col_m1: st.metric("Fecha Límite", "31/12/{}".format(extremo['anio']))
+                with col_m2: st.metric("Fecha Incumplimiento", "01/01/{}".format(extremo['anio'] + 1))
+
+            # Se elimina explícitamente cualquier referencia a fecha_extemporanea
+            extremo['fecha_extemporanea'] = None
 
     return datos_hecho
 
@@ -286,35 +246,18 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
 # FUNCIÓN 3: VALIDACIÓN DE INPUTS
 # ---------------------------------------------------------------------
 def validar_inputs(datos_hecho):
-    """
-    Valida inputs de INF009 (Registro Anual).
-    """
-    # --- INICIO DE LA MODIFICACIÓN: Validar fechas de supervisión ---
-    if not datos_hecho.get('fecha_supervision_inicio'):
-        st.warning("Debe ingresar la 'Fecha de inicio de supervisión' (Sección 1).")
-        return False
-    if not datos_hecho.get('fecha_supervision_fin'):
-        st.warning("Debe ingresar la 'Fecha de fin de supervisión' (Sección 1).")
-        return False
-    # --- FIN DE LA MODIFICACIÓN ---
-
     if not datos_hecho.get('extremos'):
-        st.warning("Debe añadir al menos un extremo (Sección 2).")
+        st.warning("Debe añadir al menos un extremo.")
         return False
     
     for j, extremo in enumerate(datos_hecho.get('extremos', [])):
         if not all([
             extremo.get('anio'),
-            extremo.get('fecha_incumplimiento'),
-            extremo.get('tipo_extremo')
+            extremo.get('fecha_supervision_inicio'),
+            extremo.get('fecha_supervision_fin')
         ]):
-            st.warning(f"Extremo {j+1}: Faltan datos (Año, Fecha Incumplimiento o Tipo).")
+            st.warning(f"Extremo {j+1}: Faltan datos (Año o Periodo de supervisión).")
             return False
-        
-        if extremo.get('tipo_extremo') == "Presentó fuera de plazo" and not extremo.get('fecha_extemporanea'):
-            st.warning(f"Extremo {j+1}: Debe ingresar la 'Fecha de cumplimiento extemporáneo'.")
-            return False
-            
     return True
 
 
@@ -429,11 +372,10 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual'] + 1}",
             'anio_declaracion': f"{extremo.get('anio', 'N/A')}",
             
-            # --- INICIO DE LA MODIFICACIÓN: Nuevos Placeholders ---
-            'fecha_supervision_inicio': format_date(datos_hecho.get('fecha_supervision_inicio'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('fecha_supervision_inicio') else "N/A",
-            'fecha_supervision_fin': format_date(datos_hecho.get('fecha_supervision_fin'), "d 'de' MMMM 'de' yyyy", locale='es') if datos_hecho.get('fecha_supervision_fin') else "N/A",
-            # --- FIN DE LA MODIFICACIÓN ---
-            
+            # ... otros campos ...
+            'fecha_supervision_inicio': format_date(extremo.get('fecha_supervision_inicio'), "d 'de' MMMM 'de' yyyy", locale='es'),
+            'fecha_supervision_fin': format_date(extremo.get('fecha_supervision_fin'), "d 'de' MMMM 'de' yyyy", locale='es'),
+            # ...
             'aplicar_capacitacion': False, 
             'label_ce_principal': "CE",     
             'tabla_ce1': tabla_ce,          
