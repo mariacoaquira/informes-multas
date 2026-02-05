@@ -98,7 +98,7 @@ def cargar_hoja_a_df(_client, nombre_archivo, nombre_hoja):
             try:
                 # errors='ignore' significa: si encuentra texto real (ej: "S/"), no lo rompe, lo deja como texto.
                 # Si toda la columna parece número, la convierte.
-                df[col] = pd.to_numeric(df[col], errors='ignore')
+                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(df[col])
             except:
                 pass
 
@@ -488,98 +488,99 @@ def json_serializador_fecha(obj):
     raise TypeError(f"Tipo {type(obj)} no es serializable en JSON")
 
 def guardar_datos_caso(cliente, expediente, producto, datos_python):
-    """
-    Guarda el diccionario de datos de un caso en GSheet 'Memoria_Casos' como JSON.
-    """
     try:
         sheet_memoria = cliente.open("Base de datos").worksheet("Memoria_Casos")
+        records = sheet_memoria.get_all_records()
         
-        # 1. Convertir el diccionario de Python a un string JSON
-        # Usamos 'default' para manejar las fechas (date, datetime)
         datos_en_json = json.dumps(datos_python, default=json_serializador_fecha)
+        fecha_actual_str = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
         
-        # 2. Preparar la fila
-        fecha_actual_str = datetime.now().isoformat()
+        fila_a_actualizar = None
         
-        # 3. Buscar si el expediente ya existe
-        try:
-            cell = sheet_memoria.find(expediente)
-        except gspread.exceptions.CellNotFound:
-            cell = None
+        if records:
+            # Identificar encabezados reales
+            sample = records[0]
+            key_exp = next((k for k in sample.keys() if k.strip().upper() == 'EXPEDIENTE'), 'EXPEDIENTE')
+            key_prod = next((k for k in sample.keys() if k.strip().upper() == 'PRODUCTO'), 'PRODUCTO')
+
+            exp_buscado = str(expediente).strip().upper()
+            prod_buscado = str(producto).strip().upper()
+
+            for i, row in enumerate(records):
+                if str(row.get(key_exp, '')).strip().upper() == exp_buscado and \
+                   str(row.get(key_prod, '')).strip().upper() == prod_buscado:
+                    fila_a_actualizar = i + 2
+                    break
             
-        if cell:
-            # YA EXISTE: Actualizar la fila existente
-            fila_para_actualizar = [expediente, producto, fecha_actual_str, datos_en_json]
-            sheet_memoria.update(f"A{cell.row}:D{cell.row}", [fila_para_actualizar])
-            return True, f"Avance actualizado para {expediente}."
+        if fila_a_actualizar:
+            sheet_memoria.update_cell(fila_a_actualizar, 3, fecha_actual_str)
+            sheet_memoria.update_cell(fila_a_actualizar, 4, datos_en_json)
+            return True, f"Avance de {producto} actualizado correctamente."
         else:
-            # NO EXISTE: Añadir una fila nueva
             fila_nueva = [expediente, producto, fecha_actual_str, datos_en_json]
             sheet_memoria.append_row(fila_nueva)
-            return True, f"Avance guardado por primera vez para {expediente}."
+            return True, f"Nuevo registro de {producto} guardado."
 
     except Exception as e:
-        import traceback
-        traceback.print_exc()
-        return False, f"Error al guardar en GSheet: {e}"
+        return False, f"Error al guardar: {e}"
 
 def cargar_datos_caso(cliente, expediente):
-    """
-    Carga el string JSON desde GSheet 'Memoria_Casos' y lo convierte a diccionario Python.
-    """
     try:
         sheet_memoria = cliente.open("Base de datos").worksheet("Memoria_Casos")
+        records = sheet_memoria.get_all_records()
         
-        # 1. Buscar el expediente
-        try:
-            cell = sheet_memoria.find(expediente)
-        except gspread.exceptions.CellNotFound:
-            return None, f"No se encontró un avance guardado para {expediente}."
+        if not records:
+            return None, "La hoja de memoria está vacía."
+
+        # 1. Identificar los nombres reales de las columnas (insensible a mayúsculas/espacios)
+        # Esto evita que falle si en el Excel dice "Expediente" y el código busca "EXPEDIENTE"
+        sample_row = records[0]
+        key_exp = next((k for k in sample_row.keys() if k.strip().upper() == 'EXPEDIENTE'), 'EXPEDIENTE')
+        key_prod = next((k for k in sample_row.keys() if k.strip().upper() == 'PRODUCTO'), 'PRODUCTO')
+        key_json = next((k for k in sample_row.keys() if k.strip().upper() == 'DATOS_JSON'), 'DATOS_JSON')
+
+        # 2. Filtrar todas las filas que coincidan con el expediente (limpiando espacios)
+        exp_buscado = str(expediente).strip().upper()
+        coincidencias = [
+            r for r in records 
+            if str(r.get(key_exp, '')).strip().upper() == exp_buscado
+        ]
+        
+        if not coincidencias:
+            return None, f"No se encontró ningún avance guardado para {expediente}."
             
-        # 2. Obtener el string JSON de la columna 4 (datos_json)
-        json_guardado = sheet_memoria.cell(cell.row, 4).value
+        # 3. Tomar el último registro (el más reciente)
+        ultimo_registro = coincidencias[-1]
+        json_guardado = ultimo_registro.get(key_json)
+        
         if not json_guardado:
-            return None, "La celda de datos estaba vacía."
+            return None, "Error: El registro existe pero la columna de datos está vacía."
             
-        # 3. Convertir de JSON a diccionario Python
         datos_cargados = json.loads(json_guardado)
         
-        # 4. ¡CRÍTICO! Re-convertir los strings de fecha a objetos 'date'
-        
-        # Primero las fechas de 'imputaciones_data' (las más complejas)
+        # 4. Restaurar fechas (Tu lógica de conversión ISO se mantiene)
         for hecho in datos_cargados.get('imputaciones_data', []):
-            # Fechas de reducción (de app.py)
-            if hecho.get('memo_fecha'):
-                hecho['memo_fecha'] = datetime.fromisoformat(hecho['memo_fecha']).date()
-            if hecho.get('escrito_fecha'):
-                hecho['escrito_fecha'] = datetime.fromisoformat(hecho['escrito_fecha']).date()
-                
-            # Fechas de extremos (de INF007, INF008, etc.)
-            for extremo in hecho.get('extremos', []):
-                if extremo.get('fecha_incumplimiento'):
-                    extremo['fecha_incumplimiento'] = datetime.fromisoformat(extremo['fecha_incumplimiento']).date()
-                if extremo.get('fecha_extemporanea'):
-                    extremo['fecha_extemporanea'] = datetime.fromisoformat(extremo['fecha_extemporanea']).date()
+            if hecho.get('memo_fecha'): hecho['memo_fecha'] = datetime.fromisoformat(hecho['memo_fecha']).date()
+            if hecho.get('escrito_fecha'): hecho['escrito_fecha'] = datetime.fromisoformat(hecho['escrito_fecha']).date()
+            for ext in hecho.get('extremos', []):
+                if ext.get('fecha_incumplimiento'): ext['fecha_incumplimiento'] = datetime.fromisoformat(ext['fecha_incumplimiento']).date()
+                if ext.get('fecha_extemporanea'): ext['fecha_extemporanea'] = datetime.fromisoformat(ext['fecha_extemporanea']).date()
+                if ext.get('fecha_supervision'): ext['fecha_supervision'] = datetime.fromisoformat(ext['fecha_supervision']).date() # <-- AÑADIDO PARA INF011
 
-        # Ahora las fechas del 'Paso 2' y 'Paso 3.5'
         if datos_cargados.get('fecha_emision_informe'):
             datos_cargados['fecha_emision_informe'] = datetime.fromisoformat(datos_cargados['fecha_emision_informe']).date()
         if datos_cargados.get('fecha_rsd'):
             datos_cargados['fecha_rsd'] = datetime.fromisoformat(datos_cargados['fecha_rsd']).date()
-        
-        for anio_data in datos_cargados.get('confiscatoriedad', {}).get('datos_por_anio', {}).values():
-            if anio_data.get('escrito_fecha_conf'):
-                anio_data['escrito_fecha_conf'] = datetime.fromisoformat(anio_data['escrito_fecha_conf']).date()
+        if datos_cargados.get('fecha_ifi'):
+            datos_cargados['fecha_ifi'] = datetime.fromisoformat(datos_cargados['fecha_ifi']).date()
 
-        return datos_cargados, "Datos cargados exitosamente."
+        return datos_cargados, f"Se cargó el último avance ({ultimo_registro.get(key_prod, 'N/A')})."
 
     except Exception as e:
         import traceback
         traceback.print_exc()
-        return None, f"Error al cargar/procesar datos: {e}"
-
-# --- FIN: NUEVAS FUNCIONES DE MEMORIA DE CASOS ---
-
+        return None, f"Error al cargar datos: {e}"
+    
 # --------------------------------------------------------------------
 #  NUEVA FUNCIÓN AUXILIAR: SIMULACIÓN EXCEL
 # --------------------------------------------------------------------

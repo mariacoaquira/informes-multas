@@ -24,7 +24,6 @@ from jinja2 import Environment
 import copy #
 
 # Importaciones de nuestros módulos
-# Importaciones de nuestros módulos
 from sheets import (conectar_gsheet, cargar_hoja_a_df, 
                     get_person_details_by_base_name, descargar_archivo_drive,
                     calcular_beneficio_ilicito, calcular_multa,
@@ -33,6 +32,87 @@ from sheets import (conectar_gsheet, cargar_hoja_a_df,
 from funciones import (combinar_con_composer, create_table_subdoc, 
                      create_main_table_subdoc, create_summary_table_subdoc, create_personal_table_subdoc, NumberingManager,
                      texto_con_numero, format_decimal_dinamico, get_initials_from_name, formatear_lista_hechos, redondeo_excel, create_capacitacion_table_subdoc)
+
+def preparar_datos_para_json(obj):
+    """
+    Limpia recursivamente un objeto para que sea compatible con JSON.
+    Convierte fechas a string y elimina objetos binarios o complejos.
+    """
+    if isinstance(obj, dict):
+        # Eliminamos claves conocidas que causan errores de guardado (objetos binarios/clases)
+        claves_invalidas = {'resultados', 'anexos_ce', 'tabla_detalle_personal', 'acronyms', 'numbering', 'doc_tpl'}
+        return {k: preparar_datos_para_json(v) for k, v in obj.items() if k not in claves_invalidas}
+    elif isinstance(obj, list):
+        return [preparar_datos_para_json(i) for i in obj]
+    elif isinstance(obj, (datetime, date)):
+        return obj.isoformat() # "2024-05-20"
+    elif isinstance(obj, (RichText, io.BytesIO)):
+        return None # No se pueden guardar estos objetos
+    return obj
+
+
+def actualizar_y_recalcular_prorrateos(cliente_gspread, NOMBRE_GSHEET_MAESTRO):
+    """
+    Analiza todos los hechos calculados, detecta colisiones de capacitación por año,
+    actualiza los factores de prorrateo y vuelve a procesar los resultados para que
+    la interfaz muestre los montos actualizados (1/N).
+    """
+    if 'imputaciones_data' not in st.session_state:
+        return
+
+    # 1. Contar cuántos extremos hay por cada año (solo para los que usan capacitación)
+    conteo_por_anio = {}
+    for datos in st.session_state.imputaciones_data:
+        id_inf = datos.get('id_infraccion', '')
+        for extremo in datos.get('extremos', []):
+            tipo = extremo.get('tipo_extremo', '') or extremo.get('tipo_presentacion', '')
+            # Lógica: INF003 siempre cuenta, otros solo si es "No presentó"
+            if 'INF003' in id_inf or tipo in ["No presentó", "No remitió", "No remitió información / Remitió incompleto"]:
+                fecha = extremo.get('fecha_incumplimiento') or extremo.get('fecha_incumplimiento_extremo')
+                if fecha:
+                    conteo_por_anio[fecha.year] = conteo_por_anio.get(fecha.year, 0) + 1
+
+    # 2. Actualizar factores y disparar recálculo de los hechos afectados
+    for i, datos in enumerate(st.session_state.imputaciones_data):
+        id_inf = datos.get('id_infraccion')
+        if not id_inf or 'resultados' not in datos:
+            continue
+
+        mapa_nuevo = {}
+        for extremo in datos.get('extremos', []):
+            fecha = extremo.get('fecha_incumplimiento') or extremo.get('fecha_incumplimiento_extremo')
+            if fecha and fecha.year in conteo_por_anio:
+                mapa_nuevo[fecha.year] = 1.0 / conteo_por_anio[fecha.year]
+        
+        # Si el factor cambió, recalculamos este hecho individual
+        if datos.get('mapa_factores_prorrateo') != mapa_nuevo:
+            datos['mapa_factores_prorrateo'] = mapa_nuevo
+            
+            # --- RE-EJECUCIÓN DEL PROCESAMIENTO ---
+            try:
+                modulo = importlib.import_module(f"infracciones.{id_inf}")
+                # Reconstruir datos comunes (similar al botón de calcular del Paso 3)
+                df_tip = st.session_state.datos_calculo['df_tipificacion']
+                id_plantilla = df_tip[df_tip['ID_Infraccion'] == id_inf].iloc[0]['ID_Plantilla_BI']
+                
+                datos_comunes = {
+                    **st.session_state.datos_calculo,
+                    'datos_hecho_completos': datos,
+                    'fecha_emision_informe': st.session_state.get('fecha_emision_informe', date.today()),
+                    'id_infraccion': id_inf,
+                    'rubro': st.session_state.rubro_seleccionado,
+                    'id_rubro_seleccionado': st.session_state.get('id_rubro_seleccionado'),
+                    'numero_hecho_actual': i + 1,
+                    'doc_tpl': DocxTemplate(descargar_archivo_drive(id_plantilla)),
+                    'context_data': st.session_state.get('context_data', {}),
+                    'acronym_manager': st.session_state.context_data.get('acronyms')
+                }
+                
+                nuevos_res = modulo.procesar_infraccion(datos_comunes, datos)
+                if not nuevos_res.get('error'):
+                    st.session_state.imputaciones_data[i]['resultados'] = nuevos_res
+            except Exception as e:
+                st.error(f"Error al actualizar prorrateo del Hecho {i+1}: {e}")
 
 # --- CONSTANTES: FACTORES DE GRADUACIÓN (f1 a f7) ---
 FACTORES_GRADUACION = {
@@ -345,11 +425,19 @@ if cliente_gspread:
             num_expediente_input = st.text_input("Ingresa el N° de Expediente:", placeholder="Ej: 1234-2023 o 1234-2023-OEFA/DFAI/PAS")
             
             if st.button("Buscar Expediente", type="primary"):
-                # --- MEJORA: Limpiamos solo los datos relevantes, no toda la sesión ---
-                if 'info_expediente' in st.session_state:
-                    del st.session_state['info_expediente']
-                if 'imputaciones_data' in st.session_state:
-                    del st.session_state['imputaciones_data']
+                # --- LIMPIEZA PROFUNDA DE SESIÓN ---
+                claves_a_limpiar = [
+                    'info_expediente', 'imputaciones_data', 'context_data', 
+                    'num_expediente_formateado', 'rubro_seleccionado', 
+                    'id_rubro_seleccionado', 'id_subdireccion_seleccionada',
+                    'confiscatoriedad', 'numero_rsd_base', 'fecha_rsd',
+                    'numero_ifi', 'fecha_ifi', 'num_informe_multa_ifi',
+                    'monto_multa_ifi', 'num_imputaciones_ifi'
+                ]
+                for clave in claves_a_limpiar:
+                    if clave in st.session_state:
+                        del st.session_state[clave]
+                st.rerun() # Forzamos recarga para asegurar limpieza
             
             if num_expediente_input:
                 num_formateado = ""
@@ -361,27 +449,45 @@ if cliente_gspread:
                 if num_formateado:
                     resultado = df_asignaciones[df_asignaciones['EXPEDIENTE'] == num_formateado]
                     if not resultado.empty:
-                        # Guardamos los datos del expediente si no los teníamos ya
-                        if 'info_expediente' not in st.session_state:
-                            st.success(f"¡Expediente '{num_formateado}' encontrado!")
+                        # --- CORRECCIÓN: Actualizar si el número es diferente al actual ---
+                        if st.session_state.get('num_expediente_formateado') != num_formateado:
                             st.session_state.num_expediente_formateado = num_formateado
                             st.session_state.info_expediente = resultado.iloc[0].to_dict()
-
-                        # --- INICIO:  AÑADIR BOTÓN DE CARGA ---
+                            
+                            # Limpiar datos de hechos anteriores al cambiar de expediente
+                            if 'imputaciones_data' in st.session_state:
+                                del st.session_state['imputaciones_data']
+                            
+                            st.success(f"¡Expediente '{num_formateado}' cargado correctamente!")
+                        # --- BLOQUE DE CARGA OPTIMIZADO ---
                         if st.button("📥 Cargar Avance Guardado"):
                             expediente_a_cargar = st.session_state.num_expediente_formateado
-                            with st.spinner("Buscando avance guardado..."):
+                            with st.spinner("Buscando avance..."):
                                 datos_cargados, mensaje = cargar_datos_caso(cliente_gspread, expediente_a_cargar)
                             
                             if datos_cargados:
-                                # ¡ÉXITO! Cargar todos los datos en st.session_state
+                                # Función interna para reconstruir fechas
+                                def restaurar_fechas(obj):
+                                    if isinstance(obj, dict):
+                                        for k, v in obj.items():
+                                            if isinstance(v, str) and len(v) == 10 and v.count('-') == 2:
+                                                try:
+                                                    obj[k] = date.fromisoformat(v)
+                                                except: pass
+                                            else: restaurar_fechas(v)
+                                    elif isinstance(obj, list):
+                                        for i in obj: restaurar_fechas(i)
+
+                                restaurar_fechas(datos_cargados)
+                                
+                                # Inyectar en el session_state
                                 for key, value in datos_cargados.items():
                                     st.session_state[key] = value
-                                st.success(mensaje)
-                                st.rerun() # Refrescar la app para mostrar los datos
+                                
+                                st.success("Datos cargados. Los cálculos se actualizarán al presionar 'Generar Informe'.")
+                                st.rerun()
                             else:
                                 st.warning(mensaje)
-                        # --- FIN: AÑADIR BOTÓN DE CARGA ---
 
                         
                         # --- CORRECCIÓN CLAVE ---
@@ -447,129 +553,124 @@ if cliente_gspread:
             else:
                 st.error("No se pudo cargar la hoja 'Sector_Subdireccion'.")
 
-        # --- INICIO: (REQ 1) AÑADIR FECHA DE EMISIÓN ---
         st.subheader("Fecha del Informe")
+
+        # Inicializamos el valor en el estado solo si no existe
+        if 'fecha_emision_informe' not in st.session_state:
+            st.session_state['fecha_emision_informe'] = date.today()
+
+        # El widget ahora solo usa el 'key', Streamlit manejará el valor automáticamente
         fecha_emision_informe = st.date_input(
             "Selecciona la fecha de emisión del informe (para cálculos)",
-            value=st.session_state.get('fecha_emision_informe', date.today()),
             key='fecha_emision_informe',
             format="DD/MM/YYYY"
         )
-        # --- FIN: (REQ 1) ---
 
         # --- Subsección: Resolución Subdirectoral (RSD) ---
-        st.subheader("Resolución Subdirectoral (RSD)")
-        
-# --- INICIO: (REQ 1) CORRECCIÓN RSD v2 ---
-        # El layout ahora solo tiene 2 columnas
-        col_rsd1, col_rsd2 = st.columns([1, 1])
-        
-        with col_rsd1:
-            # 1. El usuario ahora ingresa "Número-Año" directamente
-            numero_rsd_base = st.text_input(
-                "N.º de RSD y Año (Formato: 00245-2025):", 
-                value=st.session_state.get('numero_rsd_base', ''), 
-                key='numero_rsd_base',
-                placeholder="00245-2025"
-            )
+        producto_caso = st.session_state.info_expediente.get('PRODUCTO', '')
 
-            # 2. Construcción simplificada (Sin cálculo automático de año)
-            numero_rsd_completo = ""
-            if numero_rsd_base:
-                suffix_sub = st.session_state.get('id_subdireccion_seleccionada', 'ERROR_SUB')
-                # Solo agregamos el sufijo institucional
-                numero_rsd_completo = f"{numero_rsd_base}-OEFA/DFAI-{suffix_sub}"
+        # Solo mostramos estos campos si el producto requiere una RSD de base (IFI y RD)
+        if producto_caso != 'COERCITIVA':
+            st.subheader("Resolución Subdirectoral (RSD)")
+            col_rsd1, col_rsd2 = st.columns([1, 1])
             
-            # 3. Visualización Compacta (Reemplazo de st.metric por st.info)
-            # Esto evita el tamaño gigante y que el texto se corte
-            if numero_rsd_completo:
-                st.info(f"**RSD Completa:** {numero_rsd_completo}")
-            else:
-                st.caption("Ingrese el número y año para generar el identificador completo.")
-            
-            # Guardamos en el estado para el informe
-            st.session_state.numero_rsd = numero_rsd_completo 
-        # --- FIN: CORRECCIÓN RSD v3 ---
+            with col_rsd1:
+                if 'numero_rsd_base' not in st.session_state:
+                    st.session_state['numero_rsd_base'] = ''
 
-        with col_rsd2:
-            fecha_rsd_ingresada = st.date_input(
-                "Fecha de notificación de RSD", 
-                value=st.session_state.get('fecha_rsd'), 
-                key='fecha_rsd',
-                format="DD/MM/YYYY"
-            )
-        # --- FIN: (REQ 1) CORRECCIÓN RSD v2 ---
+                st.text_input(
+                    "N.º de RSD y Año (Formato: 00245-2025):", 
+                    key='numero_rsd_base',
+                    placeholder="00245-2025"
+                )
+
+                numero_rsd_base = st.session_state.get('numero_rsd_base', '')
+                numero_rsd_completo = ""
+                if numero_rsd_base:
+                    suffix_sub = st.session_state.get('id_subdireccion_seleccionada', 'ERROR_SUB')
+                    numero_rsd_completo = f"{numero_rsd_base}-OEFA/DFAI-{suffix_sub}"
+                
+                if numero_rsd_completo:
+                    st.info(f"**RSD:** {numero_rsd_completo}")
+                st.session_state.numero_rsd = numero_rsd_completo 
+
+            with col_rsd2:
+                if 'fecha_rsd' not in st.session_state:
+                    st.session_state['fecha_rsd'] = date.today()
+
+                st.date_input(
+                    "Fecha de notificación de RSD", 
+                    key='fecha_rsd',
+                    format="DD/MM/YYYY"
+                )
 
         # --- INICIO: SECCIÓN EXCLUSIVA PARA RD (IFI + INFORME MULTA) ---
         producto_caso = st.session_state.info_expediente.get('PRODUCTO', '')
         
+        # --- NUEVO ORDEN: Primero capturamos los inputs del IFI ---
         if producto_caso == 'RD':
             st.divider()
             st.subheader("Antecedentes: Informe Final de Instrucción (IFI)")
             
-            # 1. Datos Básicos del IFI
             col_ifi1, col_ifi2 = st.columns(2)
             with col_ifi1:
-                st.session_state.numero_ifi = st.text_input(
-                    "N.º del IFI", 
-                    value=st.session_state.get('numero_ifi', ''),
-                    placeholder="Ej: 00123-2023-OEFA/DFAI-SFEM"
-                )
-            with col_ifi2:
-                st.session_state.fecha_ifi = st.date_input(
-                    "Fecha de notificación del IFI", 
-                    value=st.session_state.get('fecha_ifi'),
-                    format="DD/MM/YYYY",
-                    key="input_fecha_ifi"
-                )
+                if 'numero_ifi' not in st.session_state: st.session_state.numero_ifi = ''
+                st.text_input("N.º del IFI", key="numero_ifi", placeholder="Ej: 00123-2023-OEFA/DFAI-SFEM")
             
-            # 2. Cuadro del Informe de Multa (Antecedente)
+            with col_ifi2:
+                if 'fecha_ifi' not in st.session_state: st.session_state.fecha_ifi = date.today()
+                st.date_input("Fecha de notificación del IFI", key="fecha_ifi", format="DD/MM/YYYY")
+            
             with st.container(border=True):
                 st.markdown("###### Datos del Informe de Multa (Etapa Instructora)")
-                st.caption("Datos del cálculo realizado previamente en el IFI.")
-                
                 col_im1, col_im2, col_im3 = st.columns(3)
                 with col_im1:
-                    st.session_state.num_informe_multa_ifi = st.text_input(
-                        "N.º Informe de Multa", 
-                        value=st.session_state.get('num_informe_multa_ifi', ''),
-                        placeholder="Ej: 0045-2023..."
-                    )
+                    if 'num_informe_multa_ifi' not in st.session_state: st.session_state.num_informe_multa_ifi = ''
+                    st.text_input("N.º Informe de Multa", key="num_informe_multa_ifi")
                 with col_im2:
-                    st.session_state.monto_multa_ifi = st.number_input(
-                        "Monto Total Propuesto (UIT)", 
-                        value=st.session_state.get('monto_multa_ifi', 0.0),
-                        format="%.3f",
-                        min_value=0.0
-                    )
+                    if 'monto_multa_ifi' not in st.session_state: st.session_state.monto_multa_ifi = 0.0
+                    st.number_input("Monto Total Propuesto (UIT)", key="monto_multa_ifi", format="%.3f")
                 with col_im3:
-                    st.session_state.num_imputaciones_ifi = st.number_input(
-                        "N.º Imputaciones (IFI)", 
-                        value=st.session_state.get('num_imputaciones_ifi', 1), 
-                        step=1,
-                        min_value=1
-                    )
-        # --- FIN: SECCIÓN RD ---
+                    if 'num_imputaciones_ifi' not in st.session_state: st.session_state.num_imputaciones_ifi = 1
+                    st.number_input("N.º Imputaciones (IFI)", key="num_imputaciones_ifi", min_value=1)
+
+        # --- RE-CALCULAR resolucion_ok AQUÍ ---
+        resolucion_ok = False
+        if producto_caso == 'RD':
+            if (st.session_state.get('numero_rsd') and st.session_state.get('fecha_rsd') and 
+                st.session_state.get('numero_ifi') and st.session_state.get('fecha_ifi')):
+                resolucion_ok = True
+        elif producto_caso == 'COERCITIVA':
+            resolucion_ok = True
+        else: # IFI
+            if st.session_state.get('numero_rsd') and st.session_state.get('fecha_rsd'):
+                resolucion_ok = True
 
         resolucion_ok = False
-
         if st.session_state.get('info_expediente'):
             producto_caso = st.session_state.info_expediente.get('PRODUCTO', '')
             
             if producto_caso == 'RD':
-                # Para RD exigimos IFI y RSD (o solo IFI, depende de tu proceso). 
-                # Aquí exijo ambos para estar seguros.
+                # Para RD seguimos exigiendo todo (IFI y RSD)
                 if (st.session_state.get('numero_rsd') and 
                     st.session_state.get('fecha_rsd') and 
                     st.session_state.get('numero_ifi') and 
                     st.session_state.get('fecha_ifi')):
                     resolucion_ok = True
-            else:
-                # Para IFI/COERCITIVA solo RSD (o lo que corresponda)
+            
+            elif producto_caso == 'COERCITIVA':
+                # No es necesario ingresar RSD para avanzar
+                resolucion_ok = True
+                # Aseguramos que las variables no sean None para evitar errores en el contexto
+                if 'numero_rsd' not in st.session_state: st.session_state.numero_rsd = ""
+                if 'fecha_rsd' not in st.session_state: st.session_state.fecha_rsd = date.today()
+            
+            else: # IFI
+                # Para IFI exigimos solo la RSD
                 if st.session_state.get('numero_rsd') and st.session_state.get('fecha_rsd'):
                     resolucion_ok = True
 
-        if st.session_state.get('rubro_seleccionado') and resolucion_ok and 'context_data' not in st.session_state:
+        if st.session_state.get('rubro_seleccionado') and resolucion_ok:
             with st.spinner("Preparando datos generales..."):
 
                 from funciones import AcronymManager
@@ -661,19 +762,26 @@ if cliente_gspread:
                     'num_imputaciones_ifi': st.session_state.get('num_imputaciones_ifi', 0)
                 })
                 # Lógica para obtener datos de la subdirección y SSAG
-                id_sub_row = df_sector_sub[df_sector_sub['Sector_Rubro'] == st.session_state.rubro_seleccionado]
-                if not id_sub_row.empty:
-                    id_sub = id_sub_row.iloc[0].get('ID_Subdireccion')
-                    sub_row = df_subdirecciones[df_subdirecciones['ID_Subdireccion'] == id_sub]
-                    if not sub_row.empty:
-                        # --- INICIO DE LA CORRECCIÓN ---
-                        # Asignamos explícitamente cada valor a la clave correcta del placeholder
-                        context_data['nombre_encargado_sub1'] = sub_row.iloc[0].get('Encargado_Sub', '')
-                        context_data['cargo_encargado_sub1'] = sub_row.iloc[0].get('Cargo_Encargado_Sub', '')
-                        context_data['titulo_encargado_sub1'] = sub_row.iloc[0].get('Titulo_Encargado_Sub', '')
-                        context_data['subdireccion'] = sub_row.iloc[0].get('Subdireccion', '')
-                        context_data['id_subdireccion'] = sub_row.iloc[0].get('ID_Subdireccion', '')
-                        # --- FIN DE LA CORRECCIÓN ---
+                # --- Lógica de Encargado Principal (sub1) ---
+                # Para RD y COERCITIVA siempre se dirige a la DFAI (Director)
+                if producto_caso in ['RD', 'COERCITIVA']:
+                    sub_row = df_subdirecciones[df_subdirecciones['ID_Subdireccion'].astype(str).str.strip().str.upper() == 'DFAI']
+                else:
+                    # Para IFI y otros, se mantiene el encargado del sector (Subdirector)
+                    id_sub_row = df_sector_sub[df_sector_sub['Sector_Rubro'] == st.session_state.rubro_seleccionado]
+                    sub_row = pd.DataFrame()
+                    if not id_sub_row.empty:
+                        id_sub_id = id_sub_row.iloc[0].get('ID_Subdireccion')
+                        sub_row = df_subdirecciones[df_subdirecciones['ID_Subdireccion'] == id_sub_id]
+
+                if not sub_row.empty:
+                    # Estos placeholders ahora tendrán los datos de la DFAI en RD/COERCITIVA
+                    context_data['nombre_encargado_sub1'] = sub_row.iloc[0].get('Encargado_Sub', '')
+                    context_data['cargo_encargado_sub1'] = sub_row.iloc[0].get('Cargo_Encargado_Sub', '')
+                    context_data['titulo_encargado_sub1'] = sub_row.iloc[0].get('Titulo_Encargado_Sub', '')
+                    context_data['subdireccion'] = sub_row.iloc[0].get('Subdireccion', '')
+                    context_data['id_subdireccion'] = sub_row.iloc[0].get('ID_Subdireccion', '')
+
                 ssag_row = df_subdirecciones[df_subdirecciones['ID_Subdireccion'].astype(str).str.strip().str.upper() == 'SSAG']
                 if not ssag_row.empty:
                     nombre_enc_ssag = ssag_row.iloc[0].get('Encargado_Sub')
@@ -1130,6 +1238,11 @@ if cliente_gspread:
                                             st.session_state.imputaciones_data[i]['usa_capacitacion'] = resultados_completos.get('usa_capacitacion', False)
                                             st.success(f"Hecho {i+1} calculado.")
                                             st.session_state.imputaciones_data[i]['anexos_ce'] = resultados_completos.get('anexos_ce_generados', [])
+                                            # --- NUEVA LÍNEA: Actualizar todos los hechos para reflejar el prorrateo ---
+                                            actualizar_y_recalcular_prorrateos(cliente_gspread, NOMBRE_GSHEET_MAESTRO)
+                                            
+                                            st.success(f"Hecho {i+1} calculado y montos prorrateados actualizados.")
+                                            st.rerun() # Forzar refresco para ver los cambios
                             except ImportError:
                                 st.error(f"El módulo para '{id_infraccion}' no está implementado.")
 
@@ -1273,7 +1386,7 @@ if cliente_gspread:
                                             st.dataframe(df_bi_display[cols_to_show].style.hide(axis="index"), use_container_width=True)
 
                                 # --- Lógica específica para INF004 ---
-                                elif 'INF004' in id_infraccion_actual:
+                                elif 'INF004' in id_infraccion_actual  or 'INF009' in id_infraccion_actual or 'INF010' in id_infraccion_actual:
                                     if 'extremos' in resultados_app and isinstance(resultados_app['extremos'], list):
                                         # --- Lógica para Múltiples Extremos (INF004) ---
                                         st.markdown("#### Desglose por Extremo")
@@ -1421,7 +1534,7 @@ if cliente_gspread:
                                             # --- FIN DE LA CORRECCIÓN ---
 
                                 # --- REVISED BLOCK FOR INF005 ---
-                                elif 'INF005' in id_infraccion_actual or 'INF007' in id_infraccion_actual or 'INF001' in id_infraccion_actual or 'INF008' in id_infraccion_actual or 'INF009' in id_infraccion_actual:
+                                elif any(inf in id_infraccion_actual for inf in ['INF001', 'INF005', 'INF007', 'INF008', 'INF009', 'INF011']):
                                     st.markdown("#### Desglose por Extremo")
 
                                     # Define column mappings and numeric columns
@@ -1591,61 +1704,6 @@ if cliente_gspread:
 
                 # --- FIN DEL PASO 3 ---
                 
-                # --- INICIO: AÑADIR BOTÓN DE GUARDADO (CORREGIDO) ---
-                st.divider()
-                st.markdown("### 💾 Guardar Avance")
-                if st.button("Guardar Avance del Caso en la Nube"):
-
-                    # 1. Definir qué claves de la sesión queremos guardar
-                    claves_a_guardar = [
-                        'fecha_emision_informe',
-                        'numero_rsd_base',
-                        'fecha_rsd',
-                        'confiscatoriedad',
-                        'rubro_seleccionado' # <-- Guardamos el rubro
-                    ]
-
-                    # 2. Crear el diccionario de estado base
-                    estado_a_guardar = {}
-                    for key in claves_a_guardar:
-                        if key in st.session_state:
-                            estado_a_guardar[key] = st.session_state[key]
-
-                    # --- INICIO: Limpieza de imputaciones_data ---
-                    try:
-                        # 3. Usamos deepcopy para no modificar el estado actual de la app
-                        imputaciones_limpias = copy.deepcopy(st.session_state.get('imputaciones_data', []))
-                    except Exception as e_copy:
-                        st.error(f"Error al copiar datos (deep copy): {e_copy}. No se puede guardar.")
-                        st.stop() # Detener el guardado
-
-                    # 4. Limpiar los objetos no-serializables (BytesIO, Subdoc)
-                    for hecho in imputaciones_limpias:
-                        if 'resultados' in hecho:
-                            del hecho['resultados'] # Elimina todos los resultados calculados
-                        if 'anexos_ce' in hecho:
-                            del hecho['anexos_ce'] # Elimina los anexos generados
-                        if 'tabla_detalle_personal' in hecho:
-                            # Esto es un Subdoc, también debe eliminarse si existe
-                            del hecho['tabla_detalle_personal']
-
-                    # 5. Añadir los datos limpios al estado a guardar
-                    estado_a_guardar['imputaciones_data'] = imputaciones_limpias
-                    # --- FIN: Limpieza de imputaciones_data ---
-
-                    # 6. Llamar a la función de guardado
-                    expediente_a_guardar = st.session_state.num_expediente_formateado
-                    producto_actual = st.session_state.info_expediente.get('PRODUCTO', 'IFI')
-
-                    with st.spinner("Guardando en Google Sheets..."):
-                        exito, mensaje = guardar_datos_caso(cliente_gspread, expediente_a_guardar, producto_actual, estado_a_guardar)
-
-                    if exito:
-                        st.success(mensaje)
-                    else:
-                        st.error(mensaje)
-                # --- FIN: AÑADIR BOTÓN DE GUARDADO (CORREGIDO) ---
-                
                 # --- INICIO: PASO 3.5: ANÁLISIS DE NO CONFISCATORIEDAD (CORREGIDO) ---
                 all_steps_complete_check = all('resultados' in d for d in st.session_state.imputaciones_data)
                 
@@ -1777,6 +1835,38 @@ if cliente_gspread:
                             st.session_state.confiscatoriedad['datos_por_anio'][anio_incumplimiento]['anio_ingresos'] = anio_uit
                             # (Se elimina el guardado del N°/Fecha de escrito aquí)
                             # --- FIN DE LA CORRECCIÓN (Req. 1) ---
+
+                            # --- SISTEMA DE GUARDADO UBICADO AL FINAL DE LOS INPUTS ---
+                st.divider()
+                col_save_title, col_save_btn = st.columns([2, 1])
+                with col_save_title:
+                    st.markdown("### 💾 Guardar Todo el Avance")
+                    st.caption("Guarda hechos, graduación, reducciones y análisis de confiscatoriedad.")
+                
+                with col_save_btn:
+                    if st.button("Guardar Caso en la Nube", type="secondary", use_container_width=True):
+                        with st.spinner("Sincronizando con la base de datos..."):
+                            # Lista maestra de claves a persistir
+                            claves_sesion = [
+                                'fecha_emision_informe', 'numero_rsd_base', 'fecha_rsd',
+                                'confiscatoriedad', 'rubro_seleccionado', 'imputaciones_data',
+                                'numero_ifi', 'fecha_ifi', 'num_informe_multa_ifi',
+                                'monto_multa_ifi', 'num_imputaciones_ifi'
+                            ]
+
+                            # Limpiar y serializar
+                            estado_sucio = {k: st.session_state[k] for k in claves_sesion if k in st.session_state}
+                            estado_a_guardar = preparar_datos_para_json(estado_sucio)
+
+                            expediente = st.session_state.num_expediente_formateado
+                            producto = st.session_state.info_expediente.get('PRODUCTO', 'IFI')
+
+                            exito, mensaje = guardar_datos_caso(cliente_gspread, expediente, producto, estado_a_guardar)
+
+                        if exito:
+                            st.success(f"✅ {mensaje}")
+                        else:
+                            st.error(f"❌ {mensaje}")
                                         
     # --- PASO 4: GENERAR INFORME FINAL ---
     all_steps_complete = False
@@ -1793,104 +1883,6 @@ if cliente_gspread:
             if 'context_data' in st.session_state and 'acronyms' in st.session_state.context_data:
                 st.session_state.context_data['acronyms'].defined_acronyms = set()
             # ------------------------------------------
-            # --- INICIO: LÓGICA DE RE-CÁLCULO POR PRORRATEO (AUTOMÁTICO) ---
-            with st.spinner("Verificando consistencia de costos de capacitación..."):
-                # 1. Mapear todos los extremos que generan capacitación por año
-                conteo_por_anio = {}
-                needs_recalc = False
-                
-                # Primera pasada: Contar coincidencias
-                for i, datos in enumerate(st.session_state.imputaciones_data):
-                    id_infraccion = datos.get('id_infraccion', '')
-                    
-                    for extremo in datos.get('extremos', []):
-                        tipo = extremo.get('tipo_extremo', '') or extremo.get('tipo_presentacion', '')
-                        
-                        # --- CAMBIO PUNTUAL: Incluir INF003 explícitamente ---
-                        # Si es INF003, siempre cuenta para capacitación. 
-                        # Si son otras, depende de si es "No presentó".
-                        es_inf003 = 'INF003' in id_infraccion
-                        es_omision = tipo in ["No presentó", "No remitió", "No remitió información / Remitió incompleto"]
-                        
-                        if es_inf003 or es_omision:
-                        # -----------------------------------------------------
-                            fecha = extremo.get('fecha_incumplimiento') or extremo.get('fecha_incumplimiento_extremo')
-                            if fecha:
-                                try: anio = fecha.year
-                                except: continue
-                                conteo_por_anio[anio] = conteo_por_anio.get(anio, 0) + 1
-
-                # 2. Calcular factores y verificar si cambiaron
-                for i, datos in enumerate(st.session_state.imputaciones_data):
-                    mapa_factores_actual = datos.get('mapa_factores_prorrateo', {})
-                    mapa_factores_nuevo = {}
-                    cambio_en_este_hecho = False
-                    id_infraccion = datos.get('id_infraccion', '')
-                    
-                    tiene_capacitacion = False
-                    for extremo in datos.get('extremos', []):
-                        tipo = extremo.get('tipo_extremo', '') or extremo.get('tipo_presentacion', '')
-                        
-                        # --- CAMBIO PUNTUAL: Misma lógica aquí ---
-                        es_inf003 = 'INF003' in id_infraccion
-                        es_omision = tipo in ["No presentó", "No remitió", "No remitió información / Remitió incompleto"]
-                        
-                        if es_inf003 or es_omision:
-                        # -----------------------------------------
-                            tiene_capacitacion = True
-                            fecha = extremo.get('fecha_incumplimiento') or extremo.get('fecha_incumplimiento_extremo')
-                            # ... (resto del cálculo del factor)
-                            if fecha:
-                                anio = fecha.year
-                                total_coincidencias = conteo_por_anio.get(anio, 1)
-                                # El factor es 1 / N
-                                factor = 1.0 / total_coincidencias
-                                mapa_factores_nuevo[anio] = factor
-                    
-                    # Si el mapa de factores cambió respecto a lo que tenía guardado, marcamos para recalcular
-                    # (Comparamos diccionarios)
-                    if mapa_factores_nuevo != mapa_factores_actual:
-                        datos['mapa_factores_prorrateo'] = mapa_factores_nuevo
-                        needs_recalc = True
-
-                # 3. Recalcular solo si es necesario
-                if needs_recalc:
-                    st.toast("Se detectaron coincidencias de capacitación. Recalculando montos...", icon="🔄")
-                    
-                    for i, datos in enumerate(st.session_state.imputaciones_data):
-                        # Solo recalculamos si el hecho tiene factores de prorrateo (ahorra tiempo)
-                        if datos.get('mapa_factores_prorrateo'):
-                            id_inf = datos.get('id_infraccion')
-                            if id_inf:
-                                try:
-                                    # Recargar módulo y re-procesar
-                                    modulo = importlib.import_module(f"infracciones.{id_inf}")
-                                    
-                                    # Reconstruir datos comunes (copiado del Paso 3)
-                                    acronym_manager = st.session_state.context_data.get('acronyms') # Asegúrate que esto exista o recréalo
-                                    datos_comunes_recalc = {
-                                        **st.session_state.datos_calculo,
-                                        'datos_hecho_completos': datos,
-                                        'fecha_emision_informe': st.session_state.get('fecha_emision_informe', date.today()),
-                                        'id_infraccion': id_inf,
-                                        'rubro': st.session_state.rubro_seleccionado,
-                                        'id_rubro_seleccionado': st.session_state.get('id_rubro_seleccionado'),
-                                        'numero_hecho_actual': i + 1,
-                                        'doc_tpl': DocxTemplate(descargar_archivo_drive(st.session_state.datos_calculo['df_tipificacion'][st.session_state.datos_calculo['df_tipificacion']['ID_Infraccion'] == id_inf].iloc[0]['ID_Plantilla_BI'])), # Simplificado
-                                        'context_data': st.session_state.get('context_data', {}),
-                                        'acronym_manager': acronym_manager
-                                    }
-                                    
-                                    # --- RE-EJECUCIÓN ---
-                                    nuevos_resultados = modulo.procesar_infraccion(datos_comunes_recalc, datos)
-                                    
-                                    if not nuevos_resultados.get('error'):
-                                        st.session_state.imputaciones_data[i]['resultados'] = nuevos_resultados
-                                        st.session_state.imputaciones_data[i]['anexos_ce'] = nuevos_resultados.get('anexos_ce_generados', [])
-                                        
-                                except Exception as e:
-                                    st.error(f"Error al recalcular Hecho {i+1} para prorrateo: {e}")
-            # --- FIN LÓGICA RE-CÁLCULO ---
 
             with st.status("Generando informe... Este proceso puede tardar un momento.", expanded=True) as status:
                 try:
@@ -2207,7 +2199,7 @@ if cliente_gspread:
                     # 4. Crear la tabla resumen (LÓGICA CORREGIDA)
                     
                     # --- INICIO DE LA CORRECCIÓN ---
-                    # 4a. Crear un nuevo mapa de multas finales por HECHO, aplicando los factores por AÑO
+# --- 4a. Crear un nuevo mapa de multas finales por HECHO, aplicando los factores por AÑO ---
                     mapa_hecho_a_multa_final_topped = {}
                     
                     for i, d in enumerate(st.session_state.imputaciones_data):
@@ -2217,7 +2209,7 @@ if cliente_gspread:
                             mapa_hecho_a_multa_final_topped[i] = 0.0
                             continue
                         
-                        # Obtener datos de BI y extremos
+                        # Obtener datos de BI y extremos para decidir si prorrateamos
                         resultados_hecho = d.get('resultados', {}).get('resultados_para_app', {})
                         totales_hecho = resultados_hecho.get('totales', resultados_hecho)
                         total_bi_del_hecho = totales_hecho.get('beneficio_ilicito_uit', 0)
@@ -2227,58 +2219,55 @@ if cliente_gspread:
 
                         multa_final_para_este_hecho = 0.0
 
-                        # Usar lógica de prorrateo para aplicar el factor de reducción correcto
-                        if (not input_extremos or not output_extremos or 
+                        # --- CORRECCIÓN LÓGICA: CASO SIMPLE VS MÚLTIPLE ---
+                        # Si es un solo extremo o el BI es 0, no se puede prorratear; se asigna al año del hecho.
+                        if (len(input_extremos) <= 1 or not output_extremos or 
                             len(input_extremos) != len(output_extremos) or 
                             total_bi_del_hecho == 0):
                             
-                            # Fallback: Hecho simple o sin prorrateo claro
-                            anio_inc = None
+                            anio_incumplimiento_hecho = None
                             if input_extremos:
                                 primer_extremo = input_extremos[0]
+                                # Buscar la fecha en las distintas claves posibles según el módulo
                                 fecha_inc = primer_extremo.get('fecha_incumplimiento') or primer_extremo.get('fecha_incumplimiento_extremo')
-                                if fecha_inc: anio_inc = fecha_inc.year
+                                if fecha_inc: 
+                                    anio_incumplimiento_hecho = fecha_inc.year
                             
-                            # Aplicar el factor de ese único año (si existe)
-                            factor_reduccion = mapa_anio_a_factor_reduccion.get(anio_inc, 1.0)
+                            # Obtener el factor de reducción para ese año (calculado en el análisis de confiscatoriedad)
+                            factor_reduccion = mapa_anio_a_factor_reduccion.get(anio_incumplimiento_hecho, 1.0)
                             multa_final_para_este_hecho = monto_multa_original_hecho * factor_reduccion
                         
                         else:
-                            # Prorrateo: Aplicar el factor de CADA extremo
+                            # CASO MÚLTIPLE: Prorrateo por el BI de cada extremo
                             for j, out_ext in enumerate(output_extremos):
                                 in_ext = input_extremos[j]
                                 bi_del_extremo = out_ext.get('bi_uit', 0.0)
                                 if bi_del_extremo == 0: continue
                                 
-                                # Encontrar el año del extremo
-                                fecha_inc = in_ext.get('fecha_incumplimiento') or in_ext.get('fecha_incumplimiento_extremo')
-                                if not fecha_inc: continue
+                                # Encontrar el año del extremo específico
+                                fecha_inc_ext = in_ext.get('fecha_incumplimiento') or in_ext.get('fecha_incumplimiento_extremo')
+                                if not fecha_inc_ext: continue
                                 
-                                anio_incumplimiento_extremo = fecha_inc.year
+                                anio_incumplimiento_extremo = fecha_inc_ext.year
                                 
-                                # Obtener el factor de reducción para ESE año
+                                # Obtener el factor de reducción para el año de este extremo
                                 factor_reduccion = mapa_anio_a_factor_reduccion.get(anio_incumplimiento_extremo, 1.0)
                                 
-                                # Calcular la parte de la multa que aportó este extremo
+                                # Calcular qué parte de la multa corresponde a este extremo y aplicar su tope
                                 proporcion_bi = bi_del_extremo / total_bi_del_hecho
                                 multa_original_aporte_extremo = monto_multa_original_hecho * proporcion_bi
-                                
-                                # Aplicar la reducción solo a esa parte
-                                multa_topped_aporte_extremo = multa_original_aporte_extremo * factor_reduccion
-                                
-                                multa_final_para_este_hecho += multa_topped_aporte_extremo
+                                multa_final_para_este_hecho += (multa_original_aporte_extremo * factor_reduccion)
 
                         mapa_hecho_a_multa_final_topped[i] = multa_final_para_este_hecho
                     
-                    # 4b. Crear las filas de la tabla usando el NUEVO mapa
+                    # --- 4b. Crear las filas de la tabla resumen final ---
                     summary_rows = []
                     for i, monto_final_topped in mapa_hecho_a_multa_final_topped.items():
                         summary_rows.append({
                             'Numeral': f"IV.{i + 2}", 
-                            'Infracciones': f"Hecho imputado n.° {i+1}", 
+                            'Infracciones': f"Hecho imputado n.° {i + 1}", 
                             'Monto': f"{monto_final_topped:,.3f} UIT"
                         })
-                    # --- FIN DE LA CORRECCIÓN ---
 
                     # Añadir la fila de Total (esta ya usaba el valor final correcto)
                     summary_rows.append({'Numeral': 'Total', 'Infracciones': '', 'Monto': f"{multa_total_uit_final:,.3f} UIT"})
@@ -2402,7 +2391,7 @@ if cliente_gspread:
                         
                         # 3. Construimos la frase (ya no necesitamos el prefix_np ni el replace)
                         texto_final_escenario += (
-                            f"Además, de la revisión de los documentos obrantes en el presente PAS, en relación con "
+                            f"Además, de la revisión de los documentos obrantes en el presente PAS, en relación "
                             f"{hechos_listos_np}, no se tiene información suficiente para determinar en qué "
                             f"escenario se encontraría el administrado, toda vez que, hasta la emisión del presente informe, "
                             f"no ha presentado ningún comprobante de pago, ni factura ni boletas para poder ser evaluadas."
@@ -2638,25 +2627,33 @@ if cliente_gspread:
                     
                     # --- FIN: Nueva Lógica de Resumen de Capacitación (v3 - Separada) ---
 
+                    # --- LÓGICA DE REDUCCIÓN GLOBAL ACTUALIZADA ---
                     hechos_con_reduccion_list = []
-                    # --- NUEVAS VARIABLES PARA CAPTURAR EL PRIMER CASO ---
+                    aplica_50 = False
+                    aplica_30 = False
                     primer_memo_num = ""
                     primer_memo_fecha = None
                     primer_escrito_num = ""
                     primer_escrito_fecha = None
                     
-                    # 1. Iterar para encontrar hechos con reducción
                     for i, datos_hecho in enumerate(st.session_state.imputaciones_data):
                         if datos_hecho.get('aplica_reduccion') == 'Sí':
                             hechos_con_reduccion_list.append(f"n.° {i + 1}")
                             
-                            # --- CAPTURAR DATOS DEL PRIMERO ---
-                            if not primer_memo_num: # Si es la primera vez que encontramos uno
+                            # Detectamos el porcentaje específico del hecho
+                            porcentaje = datos_hecho.get('porcentaje_reduccion')
+                            if porcentaje == "50%":
+                                aplica_50 = True
+                            elif porcentaje == "30%":
+                                aplica_30 = True
+                            
+                            # Capturamos datos del primer documento de sustento encontrado
+                            if not primer_memo_num:
                                 primer_memo_num = datos_hecho.get('memo_num', '')
                                 primer_memo_fecha = datos_hecho.get('memo_fecha')
                                 primer_escrito_num = datos_hecho.get('escrito_num', '')
                                 primer_escrito_fecha = datos_hecho.get('escrito_fecha')
-                    
+
                     # 2. Crear el placeholder booleano (para el 'if')
                     aplica_reduccion_global = len(hechos_con_reduccion_list) > 0
                     
@@ -2713,6 +2710,8 @@ if cliente_gspread:
                         'texto_explicacion_prorrateo': RichText(""), # Se mantiene vacío
                         # --- INICIO: AÑADIR NUEVOS PLACEHOLDERS GLOBALES ---
                         'aplica_reduccion_global': aplica_reduccion_global,
+                        'aplica_reduccion_50': aplica_50, # Nueva variable para el IF del 50%
+                        'aplica_reduccion_30': aplica_30,
                         'lista_hechos_con_reduccion': texto_hechos_con_reduccion,
                         'memo_num_global': primer_memo_num,
                         'memo_fecha_global': memo_fecha_formateada,

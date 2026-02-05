@@ -35,6 +35,14 @@ FUENTES_TEMPLATES = {
     
     # Textos que varían según la infracción específica
     'INFRACCIONES': {
+                        'INF001': { # No presentar IAA
+            'periodo_bi': (
+                "El período de capitalización se contabiliza a partir del primer día calendario siguiente a la fecha límite establecida para presentar el Informe Ambiental Anual ({fecha_incumplimiento_texto}) hasta la fecha del cálculo de la multa ({fecha_hoy_texto})."
+            ),
+            'periodo_bi_ext': (
+                "El período de capitalización se contabiliza a partir del primer día calendario siguiente a la fecha límite establecida para presentar el Informe Ambiental Anual ({fecha_incumplimiento_texto}) hasta la fecha de cumplimiento extemporáneo ({fecha_extemporanea_texto})."
+            )
+        },
         'INF003': { # Obstaculización a la supervisión
             'periodo_bi': (
                 "El periodo de capitalización se contabiliza a partir del último día de supervisión in situ en la cual no se facilitó el ingreso al equipo supervisor ({fecha_incumplimiento_texto}) "

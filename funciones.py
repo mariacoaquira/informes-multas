@@ -405,10 +405,10 @@ def create_main_table_coercitiva(doc_template, headers, data, keys, texto_poster
     return sub
 
 
-def create_considerations_table_subdoc(doc_template, headers, data, keys, column_widths=None):
+def create_considerations_table_subdoc(doc_template, headers, data, keys, texto_posterior=None, estilo_texto_posterior=None, column_widths=None):
     """
     Crea la tabla de consideraciones de muestreo con el estilo 'TablaCuerpo2'
-    y formato de texto y pie de tabla corregidos.
+    y permite personalizar el texto de elaboración y su estilo.
     """
     sub = doc_template.new_subdoc()
 
@@ -421,7 +421,7 @@ def create_considerations_table_subdoc(doc_template, headers, data, keys, column
             for i, width in enumerate(column_widths):
                 table.columns[i].width = Inches(width)
 
-    # --- Formato del Encabezado (sin cambios, ya estaba centrado) ---
+    # --- Formato del Encabezado ---
     hdr_cells = table.rows[0].cells
     for i, header_text in enumerate(headers):
         p = hdr_cells[i].paragraphs[0]
@@ -433,7 +433,7 @@ def create_considerations_table_subdoc(doc_template, headers, data, keys, column
         hdr_cells[i].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
         set_cell_shading(hdr_cells[i], SHADING_COLOR)
 
-    # --- Formato de las Filas de Datos (CON AJUSTES) ---
+    # --- Formato de las Filas de Datos ---
     for item in data:
         row_cells = table.add_row().cells
         for col_idx, key in enumerate(keys):
@@ -443,20 +443,18 @@ def create_considerations_table_subdoc(doc_template, headers, data, keys, column
             run = p.add_run(cell_text)
             run.font.name = 'Arial'
             run.font.size = Pt(10)
-            
-            # --- CAMBIO CLAVE 1: Centrar el texto horizontalmente ---
             p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-            
-            # --- CAMBIO CLAVE 2: Asegurar el centrado vertical ---
             row_cells[col_idx].vertical_alignment = WD_ALIGN_VERTICAL.CENTER
 
-    # --- Añadir texto de elaboración (CON AJUSTES) ---
-    texto_posterior = "Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI."
-    p = sub.add_paragraph()
-    run = p.add_run(texto_posterior)
-    p.style = 'FuenteTabla'
+    # --- Añadir texto de elaboración (DINÁMICO) ---
+    # Si no se envía texto_posterior, usa el valor por defecto
+    txt_final = texto_posterior if texto_posterior else "Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI."
+    style_final = estilo_texto_posterior if estilo_texto_posterior else 'FuenteTabla'
     
-    # --- CAMBIO CLAVE 3: Alinear el párrafo a la izquierda y sin sangría ---
+    p = sub.add_paragraph()
+    run = p.add_run(txt_final)
+    p.style = style_final
+    
     p.alignment = WD_ALIGN_PARAGRAPH.LEFT
     p.paragraph_format.left_indent = Inches(0)
 
@@ -558,11 +556,12 @@ def create_ce2_envio_table_subdoc(doc_template, data, total_soles, total_dolares
             elif key == 'cantidad':
                 cell_text = format_decimal_dinamico(val, 0)
                 align = WD_ALIGN_PARAGRAPH.CENTER
-            elif key == 'precio_unitario' or key == 'monto_soles':
-                cell_text = f"S/ {format_decimal_dinamico(val, 3)}"
+            elif key == 'precio_unitario':
+                # Forzar 3 decimales fijos para el precio
+                cell_text = f"S/ {float(val):,.3f}" if pd.notna(val) else "S/ 0.000"
                 align = WD_ALIGN_PARAGRAPH.RIGHT
-            elif key == 'monto_dolares':
-                cell_text = f"US$ {format_decimal_dinamico(val, 3)}"
+            elif key == 'monto_soles':
+                cell_text = f"S/ {format_decimal_dinamico(val, 3)}"
                 align = WD_ALIGN_PARAGRAPH.RIGHT
             else: # Factor
                 cell_text = format_decimal_dinamico(val, 3)
@@ -644,10 +643,12 @@ def create_ce2_lab_table_subdoc(doc_template, data, total_soles, total_dolares, 
                 cell_text = format_decimal_dinamico(val, 3)
                 align = WD_ALIGN_PARAGRAPH.CENTER
                 indent = Inches(0)
-            elif key in ['precio_unitario', 'precio_total', 'monto_soles']:
+            elif key in ['precio_unitario', 'precio_total']:
+                cell_text = f"S/ {float(val):,.3f}" if pd.notna(val) else "S/ 0.000"
+                align = WD_ALIGN_PARAGRAPH.RIGHT
+            elif key == 'monto_soles':
                 cell_text = f"S/ {format_decimal_dinamico(val, 3)}"
                 align = WD_ALIGN_PARAGRAPH.RIGHT
-                indent = Inches(0)
             elif key == 'monto_dolares':
                 cell_text = f"US$ {format_decimal_dinamico(val, 3)}"
                 align = WD_ALIGN_PARAGRAPH.RIGHT
@@ -718,7 +719,8 @@ def create_detailed_ce_table_subdoc(doc_template, data, total_soles, total_dolar
 
     current_grupo = None
     current_subgrupo = None
-    
+    grupo_counter = 0  # <--- AGREGAR CONTADOR
+
     for item in data:
         grupo = item.get('grupo')
         subgrupo = item.get('subgrupo')
@@ -727,10 +729,14 @@ def create_detailed_ce_table_subdoc(doc_template, data, total_soles, total_dolar
         if grupo and grupo != current_grupo:
             current_grupo = grupo
             current_subgrupo = None
+            grupo_counter += 1  # <--- INCREMENTAR
             row_cells = table.add_row().cells
             merged_cell = row_cells[0].merge(row_cells[num_cols - 1])
             p = merged_cell.paragraphs[0]
             p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+            # USAR EL CONTADOR AQUÍ:
+            run = p.add_run(f"{grupo} {grupo_counter}/") 
+            run.font.name = 'Arial'; run.font.size = Pt(8); run.bold = True
             p.paragraph_format.left_indent = Inches(0)
             run = p.add_run(f"{grupo} 1/")
             run.font.name = 'Arial'; run.font.size = Pt(8); run.bold = True
