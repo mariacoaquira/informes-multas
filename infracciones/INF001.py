@@ -233,18 +233,21 @@ def _calcular_costo_evitado_inf001(datos_comunes, datos_hecho_general, extremo_d
             if res_ce2.get('error'): 
                 result['error'] = f"CE2: {res_ce2['error']}"; return result
             elif res_ce2:
-                # --- INICIO PRORRATEO CE2 ---
-                # Verificar si existe un factor de prorrateo para el año del incumplimiento
+                # --- INICIO PRORRATEO CE2 (ACTUALIZADO) ---
                 anio_inc = fecha_incumplimiento.year
                 factor_prorrateo = datos_hecho_general.get('mapa_factores_prorrateo', {}).get(anio_inc, 1.0)
-                
                 items_ce2 = res_ce2.get('items_calculados', [])
                 
-                # Si hay prorrateo (factor < 1.0), ajustamos los montos unitarios
                 if factor_prorrateo < 1.0:
                     for item in items_ce2:
+                        # Prorrateo de montos finales
                         item['monto_soles'] = redondeo_excel(item['monto_soles'] * factor_prorrateo, 3)
                         item['monto_dolares'] = redondeo_excel(item['monto_dolares'] * factor_prorrateo, 3)
+                        # PRORRATEO DE PRECIOS BASE (Para visualización en UI)
+                        if 'precio_soles' in item:
+                            item['precio_soles'] = redondeo_excel(item['precio_soles'] * factor_prorrateo, 3)
+                        if 'precio_dolares' in item:
+                            item['precio_dolares'] = redondeo_excel(item['precio_dolares'] * factor_prorrateo, 3)
                 # --- FIN PRORRATEO CE2 ---
 
                 result['ce2_data_raw'] = items_ce2

@@ -164,14 +164,16 @@ def _procesar_hecho_simple(datos_comunes, datos_especificos):
         factor_prorrateo = datos_especificos.get('mapa_factores_prorrateo', {}).get(anio_inc, 1.0)
         
         # Si hay prorrateo (factor < 1.0), ajustamos los montos unitarios
+# --- INICIO PRORRATEO EXTERNO (ACTUALIZADO) ---
         if factor_prorrateo < 1.0:
             for item in ce_data_raw:
                 item['monto_soles'] = redondeo_excel(item['monto_soles'] * factor_prorrateo, 3)
                 item['monto_dolares'] = redondeo_excel(item['monto_dolares'] * factor_prorrateo, 3)
-                # Opcional: Marcar visualmente en descripción
-                # item['descripcion'] += f" (Prorrateado {factor_prorrateo:.0%})" 
-    # --- FIN PRORRATEO EXTERNO ---
-    
+                # PRORRATEO DE PRECIOS BASE (Para visualización en UI)
+                if 'precio_soles' in item:
+                    item['precio_soles'] = redondeo_excel(item['precio_soles'] * factor_prorrateo, 3)
+                if 'precio_dolares' in item:
+                    item['precio_dolares'] = redondeo_excel(item['precio_dolares'] * factor_prorrateo, 3)
     total_soles = sum(item.get('monto_soles', 0) for item in ce_data_raw)
     total_dolares = sum(item.get('monto_dolares', 0) for item in ce_data_raw)
 

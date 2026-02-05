@@ -302,7 +302,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
             
             # 1. TIPO DE MONITOREO
             # --- MODIFICACIÓN 1: Restringir tipos de monitoreo ---
-            lista_tipos_monitoreo = ["Monitoreo de Aire", "Monitoreo de Agua", "Monitoreo de Ruido"]
+            lista_tipos_monitoreo = ["Monitoreo de Aire", "Monitoreo de Agua", "Monitoreo de Ruido", "Monitoreo de Efluentes"]
             
             tipo_monitoreo_sel = st.selectbox(
                 "1. Tipo de Monitoreo",

@@ -242,7 +242,22 @@ def _calcular_costo_evitado_extremo_inf005(datos_comunes, datos_hecho_general, e
                 return result
             # (Guardar resultados CE2 - indentación correcta)
             elif res_ce2:
-                result['ce2_data_raw'] = res_ce2.get('items_calculados', [])
+                # --- INICIO PRORRATEO CE2 (AÑADIR ESTO) ---
+                anio_inc = fecha_calculo_ce2.year
+                factor_prorrateo = datos_hecho_general.get('mapa_factores_prorrateo', {}).get(anio_inc, 1.0)
+                items_ce2 = res_ce2.get('items_calculados', [])
+                if factor_prorrateo < 1.0:
+                    for item in items_ce2:
+                        item['monto_soles'] = redondeo_excel(item['monto_soles'] * factor_prorrateo, 3)
+                        item['monto_dolares'] = redondeo_excel(item['monto_dolares'] * factor_prorrateo, 3)
+                        if 'precio_soles' in item:
+                            item['precio_soles'] = redondeo_excel(item['precio_soles'] * factor_prorrateo, 3)
+                        if 'precio_dolares' in item:
+                            item['precio_dolares'] = redondeo_excel(item['precio_dolares'] * factor_prorrateo, 3)
+                # --- FIN PRORRATEO CE2 ---
+                
+                result['ce2_data_raw'] = items_ce2
+                # ... resto de la lógica de sumas ...
                 result['ce2_soles_calculado'] = sum(item.get('monto_soles', 0) for item in result['ce2_data_raw'])
                 result['ce2_dolares_calculado'] = sum(item.get('monto_dolares', 0) for item in result['ce2_data_raw'])
                 result['ids_anexos'].update(res_ce2.get('ids_anexos', []))
