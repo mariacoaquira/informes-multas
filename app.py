@@ -16,8 +16,6 @@ from num2words import num2words
 import base64  # <--- Add this
 import tempfile # <--- Add this
 import os       # <--- Add this
-#from docx2pdf import convert
-#import pythoncom
 import requests # <--- AÑADIR
 import traceback # <--- AÑADIR
 from jinja2 import Environment
@@ -235,7 +233,7 @@ st.write(st.session_state)
 
 # --- INICIALIZACIÓN DE LA APLICACIÓN ---
 st.set_page_config(layout="wide", page_title="Asistente de Multas")
-st.title("🤖 Asistente para Generación de Informes de Multa")
+st.title("🤖 Asistente para la elaboración de informes de multa")
 
 # --- INICIO: Lógica de Actualización BCRP ---
 def actualizar_datos_bcrp(cliente_gspread):
@@ -390,10 +388,9 @@ def actualizar_datos_bcrp(cliente_gspread):
 # --- FIN: Lógica de Actualización BCRP ---
 
 # --- INICIO: Botón de Actualización BCRP ---
-with st.expander("Panel de Sincronización de Datos Maestros"):
-    if st.button("Sincronizar datos del BCRP"):
-        # Esta función la definiremos a continuación
-        actualizar_datos_bcrp(conectar_gsheet()) 
+if st.button("Sincronizar datos del BCRP"):
+    # Esta función la definiremos a continuación
+    actualizar_datos_bcrp(conectar_gsheet()) 
 # --- FIN: Botón ---
 
 if 'app_inicializado' not in st.session_state:
@@ -521,7 +518,7 @@ if cliente_gspread:
 
         col_info1, col_info2 = st.columns(2)
         with col_info1:
-            st.text_input("Nombre o Razón Social", value=info_caso.get('ADMINISTRADO'), disabled=True)
+            st.text_input("Nombre o Razón Social del administrado", value=info_caso.get('ADMINISTRADO'), disabled=True)
             st.text_input("Producto", value=info_caso.get('PRODUCTO'), disabled=True)
 
         with col_info2:
@@ -539,7 +536,7 @@ if cliente_gspread:
                         rubro_guardado = st.session_state.get('rubro_seleccionado')
                         if rubro_guardado and rubro_guardado in lista_rubros:
                             index_seleccionado = lista_rubros.index(rubro_guardado)
-                        nombre_rubro_seleccionado = st.selectbox("Elige el rubro", options=lista_rubros, index=index_seleccionado, placeholder="Selecciona una opción...")
+                        nombre_rubro_seleccionado = st.selectbox("Elige el subsector/rubro", options=lista_rubros, index=index_seleccionado, placeholder="Selecciona una opción...")
                         if nombre_rubro_seleccionado:
                             st.session_state.rubro_seleccionado = nombre_rubro_seleccionado
                             fila_rubro = rubros_filtrados_df[rubros_filtrados_df['Sector_Rubro'] == nombre_rubro_seleccionado]
@@ -561,7 +558,7 @@ if cliente_gspread:
 
         # El widget ahora solo usa el 'key', Streamlit manejará el valor automáticamente
         fecha_emision_informe = st.date_input(
-            "Selecciona la fecha de emisión del informe (para cálculos)",
+            "Selecciona la fecha de emisión del informe:",
             key='fecha_emision_informe',
             format="DD/MM/YYYY"
         )
@@ -579,9 +576,9 @@ if cliente_gspread:
                     st.session_state['numero_rsd_base'] = ''
 
                 st.text_input(
-                    "N.º de RSD y Año (Formato: 00245-2025):", 
+                    "N° de RSD:", 
                     key='numero_rsd_base',
-                    placeholder="00245-2025"
+                    placeholder="Ej. 00245-2025"
                 )
 
                 numero_rsd_base = st.session_state.get('numero_rsd_base', '')
@@ -599,7 +596,7 @@ if cliente_gspread:
                     st.session_state['fecha_rsd'] = date.today()
 
                 st.date_input(
-                    "Fecha de notificación de RSD", 
+                    "Fecha de notificación de la RSD:", 
                     key='fecha_rsd',
                     format="DD/MM/YYYY"
                 )
@@ -610,29 +607,57 @@ if cliente_gspread:
         # --- NUEVO ORDEN: Primero capturamos los inputs del IFI ---
         if producto_caso == 'RD':
             st.divider()
-            st.subheader("Antecedentes: Informe Final de Instrucción (IFI)")
+            st.subheader("Informe Final de Instrucción (IFI)")
             
             col_ifi1, col_ifi2 = st.columns(2)
             with col_ifi1:
-                if 'numero_ifi' not in st.session_state: st.session_state.numero_ifi = ''
-                st.text_input("N.º del IFI", key="numero_ifi", placeholder="Ej: 00123-2023-OEFA/DFAI-SFEM")
-            
+                if 'numero_ifi_base' not in st.session_state: 
+                    st.session_state.numero_ifi_base = ''
+                
+                st.text_input("N° del IFI:", key="numero_ifi_base", placeholder="Ej: 00123-2023")
+                
+                # Lógica de autocompletado
+                ifi_base = st.session_state.get('numero_ifi_base', '')
+                ifi_completo = ""
+                if ifi_base:
+                    suffix_sub = st.session_state.get('id_subdireccion_seleccionada', 'SECTOR')
+                    ifi_completo = f"{ifi_base}-OEFA/DFAI-{suffix_sub}"
+                
+                if ifi_completo:
+                    st.info(f"**IFI:** {ifi_completo}")
+                
+                # Guardamos el resultado final para que lo use el informe
+                st.session_state.numero_ifi = ifi_completo
             with col_ifi2:
                 if 'fecha_ifi' not in st.session_state: st.session_state.fecha_ifi = date.today()
-                st.date_input("Fecha de notificación del IFI", key="fecha_ifi", format="DD/MM/YYYY")
+                st.date_input("Fecha de notificación del IFI:", key="fecha_ifi", format="DD/MM/YYYY")
             
             with st.container(border=True):
-                st.markdown("###### Datos del Informe de Multa (Etapa Instructora)")
+                st.markdown("###### Datos del Informe de Multa (IFI)")
                 col_im1, col_im2, col_im3 = st.columns(3)
                 with col_im1:
-                    if 'num_informe_multa_ifi' not in st.session_state: st.session_state.num_informe_multa_ifi = ''
-                    st.text_input("N.º Informe de Multa", key="num_informe_multa_ifi")
+                    if 'num_informe_multa_ifi_base' not in st.session_state: 
+                        st.session_state.num_informe_multa_ifi_base = ''
+                    
+                    st.text_input("N° de Informe de Multa:", key="num_informe_multa_ifi_base", placeholder="Ej: 00045-2024")
+                    
+                    # Lógica de autocompletado
+                    im_base = st.session_state.get('num_informe_multa_ifi_base', '')
+                    im_completo = ""
+                    if im_base:
+                        im_completo = f"{im_base}-OEFA/DFAI-SSAG"
+                    
+                    if im_completo:
+                        st.info(f"**Inf. Multa:** {im_completo}")
+                    
+                    # Guardamos el resultado final para que lo use el informe
+                    st.session_state.num_informe_multa_ifi = im_completo
                 with col_im2:
                     if 'monto_multa_ifi' not in st.session_state: st.session_state.monto_multa_ifi = 0.0
-                    st.number_input("Monto Total Propuesto (UIT)", key="monto_multa_ifi", format="%.3f")
+                    st.number_input("Monto Total Propuesto (UIT):", key="monto_multa_ifi", format="%.3f")
                 with col_im3:
                     if 'num_imputaciones_ifi' not in st.session_state: st.session_state.num_imputaciones_ifi = 1
-                    st.number_input("N.º Imputaciones (IFI)", key="num_imputaciones_ifi", min_value=1)
+                    st.number_input("Nº Imputaciones:", key="num_imputaciones_ifi", min_value=1)
 
         # --- RE-CALCULAR resolucion_ok AQUÍ ---
         resolucion_ok = False
@@ -1027,7 +1052,7 @@ if cliente_gspread:
                                 
                                 # --- INICIO: SECCIÓN GRADUACIÓN DE SANCIONES (Ubicación Correcta) ---
                                 st.divider()
-                                st.subheader("Graduación de la Sanción (Factores F)")
+                                st.subheader("Factores de graduación")
                                 
                                 datos_hecho_actual = st.session_state.imputaciones_data[i]
                                 
@@ -1045,8 +1070,8 @@ if cliente_gspread:
                                 es_eximente = False
                                 
                                 if aplica_graduacion == "Sí":
-                                    with st.expander("⚖️ Configurar Factores de Graduación", expanded=True):
-                                        st.info("Seleccione los criterios. Por defecto, todos inician en 0% (Neutro).")
+                                    with st.expander("Configurar Factores de Graduación", expanded=True):
+                                        st.info("Seleccione los criterios. Por defecto, todos inician en 0%.")
                                         
                                         # Recuperar o inicializar el diccionario de graduación
                                         if 'graduacion' not in datos_hecho_actual:
@@ -1127,11 +1152,11 @@ if cliente_gspread:
 
                                 # --- INICIO: (REQ 1) AÑADIR INPUTS DE REDUCCIÓN DE MULTA ---
                                 st.divider()
-                                st.subheader("Reducción de Multa (Opcional)")
+                                st.subheader("Reconocimiento de responsabilidad")
                                 datos_hecho_actual = st.session_state.imputaciones_data[i]
                                 
                                 aplica_reduccion = st.radio(
-                                    "¿Aplica reducción de multa?",
+                                    "¿Aplica reducción de multa por reconocimiento de responsabilidad?",
                                     ["No", "Sí"],
                                     key=f"aplica_reduccion_{i}",
                                     index=0 if datos_hecho_actual.get('aplica_reduccion', 'No') == 'No' else 1,
@@ -2915,57 +2940,50 @@ if cliente_gspread:
 
                     status.update(label="¡Informe generado con éxito!", state="complete", expanded=False)
 
-                    # --- INICIO: Reemplazo de Mammoth por Previsualización PDF ---
-#                    with st.expander("📄 Previsualización del Documento Final (PDF)"):
-#                        pdf_preview_bytes = None
-#                        try:
-#                            # --- AÑADE ESTA LÍNEA ---
-#                            pythoncom.CoInitialize()
-#                            # --- FIN DE LÍNEA AÑADIDA ---
+                    # --- INICIO: Previsualización PDF con LibreOffice ---
+                    with st.expander("📄 Previsualización del Documento Final (PDF)"):
+                        try:
+                            import subprocess
+                            st.info("🔄 Convirtiendo documento a PDF (esto puede tomar unos segundos)...")
+                            
+                            # Crear un directorio temporal seguro
+                            with tempfile.TemporaryDirectory() as temp_dir:
+                                temp_docx_path = os.path.join(temp_dir, "informe_temp.docx")
+                                temp_pdf_path = os.path.join(temp_dir, "informe_temp.pdf")
+                                
+                                # Guardar el buffer DOCX en el archivo temporal
+                                with open(temp_docx_path, "wb") as f:
+                                    f.write(final_buffer.getvalue())
+                                
+                                # Llamar a LibreOffice en modo headless (invisible)
+                                comando = [
+                                    "libreoffice", "--headless", "--convert-to", "pdf",
+                                    temp_docx_path, "--outdir", temp_dir
+                                ]
+                                
+                                # Ejecutar la conversión en la consola del servidor
+                                subprocess.run(comando, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                                
+                                # Leer el PDF generado
+                                if os.path.exists(temp_pdf_path):
+                                    with open(temp_pdf_path, "rb") as f_pdf:
+                                        pdf_preview_bytes = f_pdf.read()
+                                    
+                                    # Convertir a Base64 y mostrar en el iframe
+                                    base64_pdf = base64.b64encode(pdf_preview_bytes).decode('utf-8')
+                                    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800px" type="application/pdf"></iframe>'
+                                    st.markdown(pdf_display, unsafe_allow_html=True)
+                                else:
+                                    st.error("Error: LibreOffice se ejecutó pero no generó el PDF.")
 
-                            # Crear archivos temporales seguros
-#                            with tempfile.NamedTemporaryFile(delete=False, suffix=".docx") as temp_docx:
-#                                temp_docx.write(final_buffer.getvalue())
-#                                temp_docx_path = temp_docx.name # Guardar ruta del docx temporal
-
-                            # Crear ruta para el PDF temporal
-#                            temp_pdf_path = temp_docx_path.replace(".docx", ".pdf")
-
-#                           st.write("🔄 Convirtiendo a PDF para previsualización...")
-                            # Convertir el DOCX temporal a PDF temporal
-#                            convert(temp_docx_path, temp_pdf_path)
-
-                            # Leer el contenido del PDF temporal
-#                            if os.path.exists(temp_pdf_path):
-#                                with open(temp_pdf_path, "rb") as f_pdf:
-#                                    pdf_preview_bytes = f_pdf.read()
-#                            else:
-#                                st.error("No se pudo generar el archivo PDF temporal.")
-
-#                        except Exception as e:
-#                            st.error(f"Error al convertir DOCX a PDF: {e}")
-#                           st.error("Asegúrate de tener LibreOffice (o MS Word en Windows) instalado y accesible.")
-#                            st.error("Si usas Streamlit Cloud, configura las dependencias necesarias.")
-
-#                        finally:
-                            # Limpiar archivos temporales
-#                            if 'temp_docx_path' in locals() and os.path.exists(temp_docx_path):
-#                                os.remove(temp_docx_path)
-#                            if 'temp_pdf_path' in locals() and os.path.exists(temp_pdf_path):
-#                                os.remove(temp_pdf_path)
-
-                        # Mostrar el PDF si se generó correctamente
-#                        if pdf_preview_bytes:
-#                            try:
-#                                base64_pdf = base64.b64encode(pdf_preview_bytes).decode('utf-8')
-                                # Incrustar PDF usando un iframe con base64
-#                                pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="600px" type="application/pdf"></iframe>'
-#                                st.markdown(pdf_display, unsafe_allow_html=True)
-#                            except Exception as e_display:
-#                                st.error(f"Error al mostrar el PDF: {e_display}")
-#                        else:
-#                            st.warning("No se pudo generar la previsualización en PDF.")
-                    # --- FIN: Reemplazo ---
+                        except FileNotFoundError:
+                            st.warning("⚠️ LibreOffice no está instalado en este entorno. En Streamlit Cloud, asegúrate de haber creado el archivo 'packages.txt' con la palabra 'libreoffice'. Si estás en Windows local, ignora este mensaje o instala LibreOffice.")
+                        except subprocess.CalledProcessError as e:
+                            st.error(f"Error en la conversión. Código de salida: {e.returncode}")
+                            st.error(f"Detalle: {e.stderr.decode('utf-8', errors='ignore')}")
+                        except Exception as e:
+                            st.error(f"Error inesperado al generar la previsualización: {e}")
+                    # --- FIN: Previsualización PDF con LibreOffice ---
 
                     # Botón de descarga para el archivo WORD (.docx) - SIN CAMBIOS
                     nombre_exp = st.session_state.get('num_expediente_formateado', 'EXPEDIENTE_SIN_NUMERO')
