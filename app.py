@@ -10,13 +10,8 @@ import importlib
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH                  
 from docxcompose.composer import Composer
-from streamlit_pdf_viewer import pdf_viewer
 from docxtpl import DocxTemplate, RichText
-import mammoth
 from num2words import num2words
-import base64  # <--- Add this
-import tempfile # <--- Add this
-import os       # <--- Add this
 import requests # <--- AÑADIR
 import traceback # <--- AÑADIR
 from jinja2 import Environment
@@ -2940,49 +2935,6 @@ if cliente_gspread:
                     final_buffer.seek(0) # <-- Asegúrate que el buffer DOCX esté rebobinado
 
                     status.update(label="¡Informe generado con éxito!", state="complete", expanded=False)
-
-                    # --- INICIO: Previsualización PDF con LibreOffice ---
-                    with st.expander("📄 Previsualización del Documento Final (PDF)"):
-                        try:
-                            import subprocess
-                            st.info("🔄 Convirtiendo documento a PDF (esto puede tomar unos segundos)...")
-                            
-                            # Crear un directorio temporal seguro
-                            with tempfile.TemporaryDirectory() as temp_dir:
-                                temp_docx_path = os.path.join(temp_dir, "informe_temp.docx")
-                                temp_pdf_path = os.path.join(temp_dir, "informe_temp.pdf")
-                                
-                                # Guardar el buffer DOCX en el archivo temporal
-                                with open(temp_docx_path, "wb") as f:
-                                    f.write(final_buffer.getvalue())
-                                
-                                # Llamar a LibreOffice en modo headless (invisible)
-                                comando = [
-                                    "libreoffice", "--headless", "--convert-to", "pdf",
-                                    temp_docx_path, "--outdir", temp_dir
-                                ]
-                                
-                                # Ejecutar la conversión en la consola del servidor
-                                subprocess.run(comando, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                                
-                                # Leer el PDF generado
-                                if os.path.exists(temp_pdf_path):
-                                    with open(temp_pdf_path, "rb") as f_pdf:
-                                        pdf_preview_bytes = f_pdf.read()
-                                    
-                                    # Mostrar usando el visor nativo de Streamlit (Sin bloqueos de Chrome)
-                                    pdf_viewer(input=pdf_preview_bytes, width=700, height=800)
-                                else:
-                                    st.error("Error: LibreOffice se ejecutó pero no generó el PDF.")
-
-                        except FileNotFoundError:
-                            st.warning("⚠️ LibreOffice no está instalado en este entorno. En Streamlit Cloud, asegúrate de haber creado el archivo 'packages.txt' con la palabra 'libreoffice'. Si estás en Windows local, ignora este mensaje o instala LibreOffice.")
-                        except subprocess.CalledProcessError as e:
-                            st.error(f"Error en la conversión. Código de salida: {e.returncode}")
-                            st.error(f"Detalle: {e.stderr.decode('utf-8', errors='ignore')}")
-                        except Exception as e:
-                            st.error(f"Error inesperado al generar la previsualización: {e}")
-                    # --- FIN: Previsualización PDF con LibreOffice ---
 
                     # Botón de descarga para el archivo WORD (.docx) - SIN CAMBIOS
                     nombre_exp = st.session_state.get('num_expediente_formateado', 'EXPEDIENTE_SIN_NUMERO')
