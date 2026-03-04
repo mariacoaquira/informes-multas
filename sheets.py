@@ -524,6 +524,8 @@ def guardar_datos_caso(cliente, expediente, producto, datos_python):
     except Exception as e:
         return False, f"Error al guardar: {e}"
 
+# --- REEMPLAZA LA FUNCIÓN cargar_datos_caso EN sheets.py ---
+
 def cargar_datos_caso(cliente, expediente):
     try:
         sheet_memoria = cliente.open("Base de datos").worksheet("Memoria_Casos")
@@ -532,14 +534,16 @@ def cargar_datos_caso(cliente, expediente):
         if not records:
             return None, "La hoja de memoria está vacía."
 
-        # 1. Identificar los nombres reales de las columnas (insensible a mayúsculas/espacios)
-        # Esto evita que falle si en el Excel dice "Expediente" y el código busca "EXPEDIENTE"
+        # 1. Identificar encabezados reales (insensible a mayúsculas/espacios)
         sample_row = records[0]
         key_exp = next((k for k in sample_row.keys() if k.strip().upper() == 'EXPEDIENTE'), 'EXPEDIENTE')
         key_prod = next((k for k in sample_row.keys() if k.strip().upper() == 'PRODUCTO'), 'PRODUCTO')
         key_json = next((k for k in sample_row.keys() if k.strip().upper() == 'DATOS_JSON'), 'DATOS_JSON')
+        # Buscamos la columna FECHA (puede llamarse FECHA, FECHA_REGISTRO, etc.)
+        # Asumimos que es la columna C, pero buscamos por nombre 'FECHA'
+        key_fecha = next((k for k in sample_row.keys() if 'FECHA' in k.strip().upper()), 'FECHA')
 
-        # 2. Filtrar todas las filas que coincidan con el expediente (limpiando espacios)
+        # 2. Filtrar filas que coincidan con el expediente
         exp_buscado = str(expediente).strip().upper()
         coincidencias = [
             r for r in records 
@@ -549,23 +553,47 @@ def cargar_datos_caso(cliente, expediente):
         if not coincidencias:
             return None, f"No se encontró ningún avance guardado para {expediente}."
             
-        # 3. Tomar el último registro (el más reciente)
-        ultimo_registro = coincidencias[-1]
-        json_guardado = ultimo_registro.get(key_json)
+        # 3. LÓGICA DE FECHA MÁS RECIENTE
+        registro_mas_reciente = None
+        fecha_maxima = datetime.min # Fecha muy antigua inicial
+
+        for fila in coincidencias:
+            fecha_str = str(fila.get(key_fecha, ''))
+            fecha_obj = None
+            
+            # Intentar parsear varios formatos posibles
+            for fmt in ["%d/%m/%Y %H:%M:%S", "%Y-%m-%dT%H:%M:%S.%f", "%d/%m/%Y", "%Y-%m-%d"]:
+                try:
+                    fecha_obj = datetime.strptime(fecha_str, fmt)
+                    break
+                except ValueError:
+                    continue
+            
+            # Si logramos leer la fecha y es mayor a la actual máxima, actualizamos
+            if fecha_obj and fecha_obj > fecha_maxima:
+                fecha_maxima = fecha_obj
+                registro_mas_reciente = fila
+        
+        # Si por alguna razón falló el parseo de todas las fechas, usamos el último de la lista como fallback
+        if not registro_mas_reciente:
+            registro_mas_reciente = coincidencias[-1]
+
+        # 4. Cargar datos
+        json_guardado = registro_mas_reciente.get(key_json)
         
         if not json_guardado:
             return None, "Error: El registro existe pero la columna de datos está vacía."
             
         datos_cargados = json.loads(json_guardado)
         
-        # 4. Restaurar fechas (Tu lógica de conversión ISO se mantiene)
+        # 5. Restaurar objetos de fecha (Tu lógica existente)
         for hecho in datos_cargados.get('imputaciones_data', []):
             if hecho.get('memo_fecha'): hecho['memo_fecha'] = datetime.fromisoformat(hecho['memo_fecha']).date()
             if hecho.get('escrito_fecha'): hecho['escrito_fecha'] = datetime.fromisoformat(hecho['escrito_fecha']).date()
             for ext in hecho.get('extremos', []):
                 if ext.get('fecha_incumplimiento'): ext['fecha_incumplimiento'] = datetime.fromisoformat(ext['fecha_incumplimiento']).date()
                 if ext.get('fecha_extemporanea'): ext['fecha_extemporanea'] = datetime.fromisoformat(ext['fecha_extemporanea']).date()
-                if ext.get('fecha_supervision'): ext['fecha_supervision'] = datetime.fromisoformat(ext['fecha_supervision']).date() # <-- AÑADIDO PARA INF011
+                if ext.get('fecha_supervision'): ext['fecha_supervision'] = datetime.fromisoformat(ext['fecha_supervision']).date()
 
         if datos_cargados.get('fecha_emision_informe'):
             datos_cargados['fecha_emision_informe'] = datetime.fromisoformat(datos_cargados['fecha_emision_informe']).date()
@@ -574,7 +602,11 @@ def cargar_datos_caso(cliente, expediente):
         if datos_cargados.get('fecha_ifi'):
             datos_cargados['fecha_ifi'] = datetime.fromisoformat(datos_cargados['fecha_ifi']).date()
 
-        return datos_cargados, f"Se cargó el último avance ({ultimo_registro.get(key_prod, 'N/A')})."
+        # Formato bonito para el mensaje de éxito
+        fecha_display = fecha_maxima.strftime("%d/%m/%Y %H:%M") if fecha_maxima != datetime.min else "Fecha desconocida"
+        producto_display = registro_mas_reciente.get(key_prod, 'N/A')
+        
+        return datos_cargados, f"Se cargó el avance más reciente ({producto_display}) del {fecha_display}."
 
     except Exception as e:
         import traceback
