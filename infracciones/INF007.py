@@ -18,12 +18,6 @@ from funciones import (create_main_table_subdoc, create_table_subdoc,
 from sheets import (calcular_beneficio_ilicito, calcular_multa,
                     descargar_archivo_drive,
                     calcular_beneficio_ilicito_extemporaneo)
-try:
-    from modulos.calculo_capacitacion import calcular_costo_capacitacion
-except ImportError:
-    st.error("No se pudo importar 'calcular_costo_capacitacion'.")
-    def calcular_costo_capacitacion(*args, **kwargs):
-        return {'error': 'Módulo cálculo capacitación no encontrado.'}
 from funciones import create_main_table_subdoc, create_table_subdoc, texto_con_numero, create_footnotes_subdoc, format_decimal_dinamico, redondeo_excel
 
 # ---------------------------------------------------------------------
@@ -95,20 +89,18 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
     """
     result = {
         'ce1_data_raw': [], 'ce1_soles': 0.0, 'ce1_dolares': 0.0,
-        'ce2_data_raw': [], 'ce2_soles_calculado': 0.0, 'ce2_dolares_calculado': 0.0,
         'ce_soles_para_bi': 0.0, 'ce_dolares_para_bi': 0.0,
-        'aplicar_ce2_a_bi': False,
         'ids_anexos': set(),
-        'fuentes': {'ce1': {}, 'ce2': {}}, # Contenedores para fuentes específicas
+        'fuentes': {'ce1': {}}, 
         'error': None
     }
+
     try:
         # --- 1. Datos del Extremo y Generales ---
         tipo_incumplimiento = extremo_data.get('tipo_extremo')
         # Ahora el flag es automático: Si no presentó, SIEMPRE incluye capacitación
         incluir_capacitacion_flag = (tipo_incumplimiento == "No presentó")
         fecha_incumplimiento_extremo = extremo_data.get('fecha_incumplimiento')
-        num_personal_ce2 = datos_hecho_general.get('num_personal_capacitacion', 0)
 
         if not fecha_incumplimiento_extremo:
             raise ValueError("Falta la fecha de incumplimiento del extremo.")
@@ -159,8 +151,14 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
 
                 for _, item_receta in receta_ce1.iterrows():
                     if item_receta.get('Tipo_Costo') != 'Remision': continue
-                    id_item = item_receta['ID_Item_Infraccion']; desc_item = item_receta.get('Nombre_Item', 'N/A')
-                    costos_posibles = df_costos[df_costos['ID_Item_Infraccion'] == id_item].copy();
+                    
+                    # 1. Extraemos la cadena con comas y creamos una lista limpia
+                    id_items_str = str(item_receta.get('ID_Item', ''))
+                    lista_ids_buscar = [x.strip() for x in id_items_str.split(',') if x.strip()]
+                    desc_item = item_receta.get('Nombre_Item', 'N/A')
+                    
+                    # 2. Filtramos la base de datos
+                    costos_posibles = df_costos[df_costos['ID_Item'].isin(lista_ids_buscar)].copy()
                     if costos_posibles.empty: continue
                     tipo_item = item_receta.get('Tipo_Item'); df_candidatos = pd.DataFrame()
                     if tipo_item == 'Variable': 
@@ -187,13 +185,11 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
                         idx_anio = df_ind_ce1[df_ind_ce1['Indice_Mes'].dt.year == fecha_f.year]; 
                         ipc_cost, tc_cost = (float(idx_anio['IPC_Mensual'].mean()), float(idx_anio['TC_Mensual'].mean())) if not idx_anio.empty else (0.0, 0.0)
                         
-                        # --- NUEVO: Capturar Texto de IPC Promedio ---
+                    # --- NUEVO: Capturar Texto de IPC Promedio ---
                         f_row = df_sal[df_sal['ID_Salario'] == id_gen]
                         if not f_row.empty:
-                            if 'placeholders_dinamicos' not in fuentes_ce1: 
-                                fuentes_ce1['placeholders_dinamicos'] = {}
-                            # Genera: "Promedio 2015, IPC = 108.456"
-                            fuentes_ce1['placeholders_dinamicos']['ref_ipc_salario'] = f"Promedio {fecha_f.year}, IPC = {ipc_cost:,.6f}"
+                            # Se guarda directamente con la llave correcta como en INF005
+                            fuentes_ce1['texto_ipc_costeo_salario'] = f"Promedio {fecha_f.year}, IPC = {ipc_cost:,.6f}"
                     elif pd.notna(id_gen) and 'COT' in id_gen: idx_row = df_ind_ce1[df_ind_ce1['Indice_Mes'].dt.to_period('M') == fecha_f.to_period('M')]; ipc_cost, tc_cost = (float(idx_row.iloc[0]['IPC_Mensual']), float(idx_row.iloc[0]['TC_Mensual'])) if not idx_row.empty else (0.0, 0.0)
                     if ipc_cost == 0 or pd.isna(ipc_cost): continue
                     if pd.notna(id_gen):
@@ -236,49 +232,9 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
         result['ids_anexos'].update(item.get('id_anexo') for item in result['ce1_data_raw'] if item.get('id_anexo'))
         result['fuentes']['ce1'] = res_ce1.get('fuentes', {})
 
-        # --- 4. Calcular CE2 (Capacitación) ---
-        res_ce2 = {}
-        fecha_calculo_ce2 = fecha_final_dt # Usar el datetime object
-
-        # Solo calcular CE2 si:
-        # 1. El tipo es "No presentó"
-        # 2. El flag de incluir capacitación está en "Sí"
-        # 3. Hay personal para capacitar
-        if tipo_incumplimiento == "No presentó" and incluir_capacitacion_flag and num_personal_ce2 > 0:
-            datos_comunes_ce2 = {**datos_comunes, 'fecha_incumplimiento': fecha_calculo_ce2}
-            res_ce2 = calcular_costo_capacitacion(num_personal_ce2, datos_comunes_ce2)
-
-            if res_ce2.get('error'):
-                result['error'] = f"CE2: {res_ce2['error']}"
-                return result
-            elif res_ce2:
-                # --- INICIO PRORRATEO CE2 (AÑADIR/ACTUALIZAR ESTO) ---
-                anio_inc = fecha_calculo_ce2.year
-                factor_prorrateo = datos_hecho_general.get('mapa_factores_prorrateo', {}).get(anio_inc, 1.0)
-                items_ce2 = res_ce2.get('items_calculados', [])
-                if factor_prorrateo < 1.0:
-                    for item in items_ce2:
-                        item['monto_soles'] = redondeo_excel(item['monto_soles'] * factor_prorrateo, 3)
-                        item['monto_dolares'] = redondeo_excel(item['monto_dolares'] * factor_prorrateo, 3)
-                        if 'precio_soles' in item:
-                            item['precio_soles'] = redondeo_excel(item['precio_soles'] * factor_prorrateo, 3)
-                        if 'precio_dolares' in item:
-                            item['precio_dolares'] = redondeo_excel(item['precio_dolares'] * factor_prorrateo, 3)
-                # --- FIN PRORRATEO CE2 ---
-                
-                result['ce2_data_raw'] = items_ce2
-                result['ce2_soles_calculado'] = sum(item.get('monto_soles', 0) for item in result['ce2_data_raw'])
-                result['ce2_dolares_calculado'] = sum(item.get('monto_dolares', 0) for item in result['ce2_data_raw'])
-                result['ids_anexos'].update(res_ce2.get('ids_anexos', []))
-                result['fuentes']['ce2'] = { 'fuente_salario': res_ce2.get('fuente_salario', ''), 'pdf_salario': res_ce2.get('pdf_salario', ''), 'fuente_coti': res_ce2.get('fuente_coti', '')}
-
-        # --- 5. Aplicar Lógica Condicional para BI ---
-        result['aplicar_ce2_a_bi'] = (tipo_incumplimiento == "No presentó" and incluir_capacitacion_flag)
+        # --- 4. Consolidar para BI ---
         result['ce_soles_para_bi'] = result['ce1_soles']
         result['ce_dolares_para_bi'] = result['ce1_dolares']
-        if result['aplicar_ce2_a_bi']:
-            result['ce_soles_para_bi'] += result['ce2_soles_calculado']
-            result['ce_dolares_para_bi'] += result['ce2_dolares_calculado']
 
         if not result['error']: result['error'] = None # Éxito
         return result
@@ -293,34 +249,8 @@ def _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho_general, e
 # ---------------------------------------------------------------------
 
 def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
-    st.markdown("##### Detalles del Incumplimiento: Manifiestos SIGERSOL (INF007)")
+    st.markdown("##### Detalles del Incumplimiento: Manifiestos SIGERSOL")
     datos_hecho = st.session_state.imputaciones_data[i] 
-
-    # --- INICIO CAMBIO 1: Autorelleno y Ubicación de Personal ---
-    if 'tabla_personal' not in datos_hecho or not isinstance(datos_hecho['tabla_personal'], list):
-        datos_hecho['tabla_personal'] = [
-    {
-        'Perfil': 'Gerente General', 
-        'Descripción': (
-            "El Gerente General se encuentra encargado de:\n"
-            "- Planear, dirigir y aprobar los objetivos y metas inherentes a las actividades administrativas, operativas y financieras de la empresa.\n"
-            "- Administrar los recursos materiales, económicos y tecnológicos de la empresa.\n"
-            "- Supervisar, monitorear y evaluar el desarrollo de los procesos y sistemas que se lleva a cabo en la empresa.\n"
-            "Planificar, organizar y mantener canales de comunicación que garanticen la aplicación de las disposiciones necesarias para el cumplimiento de los objetivos de la empresa."
-        ), 
-        'Cantidad': 1
-    },
-    {
-        'Perfil': 'Jefe de Seguridad, Salud Ocupacional y Medio Ambiente', 
-        'Descripción': ("El Jefe de Seguridad, Salud Ocupacional y Medio Ambiente se encuentra encargado de:\n"
-                        "- Implementar y gestionar el Sistema de Seguridad, Salud Ocupacional y Medio Ambiente y supervisar la correcta ejecución de las políticas, planes y actividades establecidas en el marco de la legislación vigente.\n"
-                        "- Elaborar el Plan y Programa Anual de Seguridad, Salud y Medio ambiente en el Trabajo, según la normativa vigente.\n"
-                        "- Elaborar el programa anual de entrenamiento y capacitación en temas de seguridad, salud y medio ambiente.\n"
-                        "- Diseñar, implementar y liderar la ejecución del plan de auditorías e inspecciones tanto internas como externas en materia de Seguridad, Salud Ocupacional y Medio Ambiente."
-                        ), 
-        'Cantidad': 1
-    }
-]
 
     st.markdown("###### **Extremos del incumplimiento**")
     if 'extremos' not in datos_hecho: datos_hecho['extremos'] = [{}]
@@ -330,45 +260,41 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
         with st.container(border=True):
             st.markdown(f"**Extremo n.° {j + 1}**")
 
-            col_anio, col_trim, col_tipo = st.columns(3)
+            # --- FILA 1: Año y Trimestre ---
+            col_anio, col_trim = st.columns(2)
             with col_anio:
                 anio_actual = date.today().year
                 extremo['anio'] = st.number_input("Año", min_value=2000, max_value=anio_actual, step=1, key=f"anio_{i}_{j}", value=extremo.get('anio', anio_actual))
             with col_trim:
                 trimestres = ["Trimestre 1 (Ene-Mar)", "Trimestre 2 (Abr-Jun)", "Trimestre 3 (Jul-Sep)", "Trimestre 4 (Oct-Dic)"]
                 extremo['trimestre'] = st.selectbox("Trimestre", trimestres, key=f"trimestre_{i}_{j}", index=trimestres.index(extremo.get('trimestre')) if extremo.get('trimestre') in trimestres else None, placeholder="Seleccione...")
-            with col_tipo:
-                tipo_extremo = st.radio("Tipo de incumplimiento", ["No presentó", "Presentó fuera de plazo"], key=f"tipo_extremo_{i}_{j}", index=0 if extremo.get('tipo_extremo') == "No presentó" else 1 if extremo.get('tipo_extremo') == "Presentó fuera de plazo" else None, horizontal=True)
-                extremo['tipo_extremo'] = tipo_extremo
-
-            # Eliminada la opción de considerar capacitación Sí/No (ahora es automático por tipo)
-
+            
+            # --- FILA 2: Fechas calculadas (Solo lectura) ---
             if extremo.get('anio') and extremo.get('trimestre'):
                 fecha_max, fecha_inc = _calcular_fechas_manifiesto(extremo['anio'], extremo['trimestre'], df_dias_no_laborables)
                 extremo['fecha_maxima_presentacion'] = fecha_max
                 extremo['fecha_incumplimiento'] = fecha_inc
-                col_m1, col_m2 = st.columns(2)
-                with col_m1: st.metric("Fecha Límite", fecha_max.strftime('%d/%m/%Y'))
-                with col_m2: st.metric("Fecha Incumplimiento", fecha_inc.strftime('%d/%m/%Y'))
-            
+                
+                col_fecha_max, col_fecha_inc = st.columns([2, 2])
+                with col_fecha_max:
+                    st.text_input("Fecha máxima de presentación", value=fecha_max.strftime('%d/%m/%Y'), disabled=True, key=f"fmax_mock_{i}_{j}")
+                with col_fecha_inc:
+                    st.info(f"**Fecha de incumplimiento:** {fecha_inc.strftime('%d/%m/%Y')}")
+
+            # --- FILA 3: Tipo de Incumplimiento ---
+            tipo_extremo = st.radio(
+                "Tipo de incumplimiento", 
+                ["No presentó", "Presentó fuera de plazo"], 
+                key=f"tipo_extremo_{i}_{j}", 
+                index=0 if extremo.get('tipo_extremo') == "No presentó" else 1 if extremo.get('tipo_extremo') == "Presentó fuera de plazo" else None, 
+                horizontal=True
+            )
+            extremo['tipo_extremo'] = tipo_extremo
+
             if tipo_extremo == "Presentó fuera de plazo":
                 fecha_inc_actual = extremo.get('fecha_incumplimiento')
                 min_fecha_ext = fecha_inc_actual if fecha_inc_actual else date.today()
                 extremo['fecha_extemporanea'] = st.date_input("Fecha cumplimiento extemporáneo", min_value=min_fecha_ext, key=f"fecha_ext_{i}_{j}", value=extremo.get('fecha_extemporanea'), format="DD/MM/YYYY")
-
-            # --- TABLA DE PERSONAL INTEGRADA ---
-            st.divider()
-            st.markdown("###### **Personal a capacitar (CE2)**")
-            df_personal = pd.DataFrame(datos_hecho['tabla_personal'])
-            if j == 0:
-                edited_df = st.data_editor(df_personal, num_rows="dynamic", key=f"data_editor_personal_{i}_{j}", hide_index=True, use_container_width=True, column_config={"Perfil": st.column_config.TextColumn(required=True), "Descripción": st.column_config.TextColumn(width="large"), "Cantidad": st.column_config.NumberColumn(min_value=0, step=1, required=True, format="%d")})
-                datos_hecho['tabla_personal'] = edited_df.to_dict('records')
-            else:
-                st.dataframe(df_personal, use_container_width=True, hide_index=True)
-
-            cant_num = [pd.to_numeric(p.get('Cantidad'), errors='coerce') for p in datos_hecho['tabla_personal']]
-            datos_hecho['num_personal_capacitacion'] = int(pd.Series(cant_num).fillna(0).sum())
-            if j == 0: st.metric("Total de Personal", f"{datos_hecho['num_personal_capacitacion']}")
 
             if st.button(f"🗑️ Eliminar", key=f"del_extremo_{i}_{j}"): datos_hecho['extremos'].pop(j); st.rerun()
     return datos_hecho
@@ -380,9 +306,6 @@ def validar_inputs(datos_hecho):
     """
     Valida inputs de INF007 (Manifiestos).
     """
-    # 1. Validar que haya personal (dato global del hecho)
-    if not datos_hecho.get('num_personal_capacitacion', 0) > 0: 
-        return False
 
     # 2. Validar que exista al menos un extremo
     if not datos_hecho.get('extremos'): 
@@ -441,8 +364,7 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         extremo = datos_hecho['extremos'][0]
         res_ce = _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho, extremo)
         if res_ce.get('error'): return {'error': f"Error CE: {res_ce['error']}"}
-        aplicar_capacitacion = res_ce['aplicar_ce2_a_bi']
-        label_ce_principal = "CE1" if aplicar_capacitacion else "CE"
+        label_ce_principal = "CE"
 
         # 3. Calcular BI y Multa
         # 3. Calcular BI y Multa
@@ -522,23 +444,6 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
         )
 
-        # --- Formato CE2 ---
-        tabla_ce2 = None
-        ce2_fmt = []
-        if aplicar_capacitacion and res_ce['ce2_data_raw']:
-            for i, item in enumerate(res_ce['ce2_data_raw']):
-                ce2_fmt.append({
-                    'descripcion': f"{item.get('descripcion', '')} {i+1}/",
-                    'precio_dolares': f"US$ {item.get('precio_dolares', 0):,.3f}",
-                    'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}",
-                    'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
-                    'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}",
-                    'monto_dolares': f"US$ {item.get('monto_dolares', 0):,.3f}"
-                })
-            ce2_fmt.append({'descripcion': 'Total', 'monto_soles': f"S/ {res_ce['ce2_soles_calculado']:,.3f}", 'monto_dolares': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}"})
-            tabla_ce2 = create_table_subdoc(doc_tpl_bi, ["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste 2/", "Monto (*) (S/)", "Monto (*) (US$) 3/"],
-                                          ce2_fmt, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
-        
         # --- SOLUCIÓN: Compactar y Reordenar Notas al Pie de BI ---
         filas_bi_crudas = res_bi.get('table_rows', [])
         fn_map_orig = res_bi.get('footnote_mapping', {})
@@ -568,21 +473,12 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         fn_data_dict = {'list': fn_list, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
         
         tabla_bi = create_main_table_subdoc(doc_tpl_bi, ["Descripción", "Monto"], filas_bi_para_tabla, keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict, column_widths=(5, 1))
-        # --- Formato Multa ---
-        tabla_multa = create_main_table_subdoc(doc_tpl_bi, ["Componentes", "Monto"], res_multa.get('multa_data_raw', []), ['Componentes', 'Monto'], texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.", estilo_texto_posterior='FuenteTabla', column_widths=(5, 1))
+        
+        # --- SOLUCIÓN: Filtrar filas vacías de la tabla multa ---
+        multa_raw_simple = res_multa.get('multa_data_raw', [])
+        multa_limpia_simple = [fila for fila in multa_raw_simple if str(fila.get('Componentes', '')).strip()]
 
-        # --- Formato Tabla Personal ---
-        tabla_personal = None
-        tabla_pers_data = []
-        num_personal_total = datos_hecho.get('num_personal_capacitacion', 0)
-        if aplicar_capacitacion:
-            tabla_pers_render = datos_hecho.get('tabla_personal', [])
-            tabla_pers_sin_total = []
-            for fila in tabla_pers_render:
-                perfil = fila.get('Perfil'); cantidad = pd.to_numeric(fila.get('Cantidad'), errors='coerce')
-                if perfil and cantidad > 0: tabla_pers_sin_total.append({'Perfil': perfil, 'Descripción': fila.get('Descripción', ''), 'Cantidad': int(cantidad)})
-            tabla_pers_data = tabla_pers_sin_total + [{'Perfil':'Total', 'Descripción':'', 'Cantidad': int(num_personal_total)}]
-            tabla_personal = create_personal_table_subdoc(doc_tpl_bi, ["Perfil (1)", "Descripción", "Cantidad"], tabla_pers_data, ['Perfil', 'Descripción', 'Cantidad'], column_widths=(2,3,1), texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.")
+        tabla_multa = create_main_table_subdoc(doc_tpl_bi, ["Componentes", "Monto"], multa_limpia_simple, ['Componentes', 'Monto'], texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.", estilo_texto_posterior='FuenteTabla', column_widths=(5, 1))
 
         # --- INICIO: Formatear Trimestre (Req. Usuario) ---
         trimestre_str_largo = extremo.get('trimestre', 'N/A')
@@ -598,18 +494,6 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         trimestre_formateado = mapa_trimestre.get(trimestre_str_largo, trimestre_str_largo) # Usa el mapeo
         placeholder_final_trimestre = f"{trimestre_formateado} de {anio_str}"
         # --- FIN: Formatear Trimestre ---
-
-        # --- INICIO: Buscar Precios Base de CE2 (Simple) ---
-        ce2_base_precio_soles_simple = 0.0
-        ce2_base_precio_dolares_simple = 0.0
-        if aplicar_capacitacion and res_ce.get('ce2_data_raw'):
-            try:
-                primer_item_ce2_simple = res_ce['ce2_data_raw'][0]
-                ce2_base_precio_soles_simple = primer_item_ce2_simple.get('precio_soles', 0.0)
-                ce2_base_precio_dolares_simple = primer_item_ce2_simple.get('precio_dolares', 0.0)
-            except IndexError:
-                pass # ce2_data_raw existe pero está vacío
-        # --- FIN: Buscar Precios Base de CE2 (Simple) ---
 
         # 5. Contexto y Renderizado Cuerpo
         fuentes_ce = res_ce.get('fuentes', {})
@@ -627,28 +511,16 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'numeral_hecho': f"IV.{datos_comunes['numero_hecho_actual'] + 1}", # Suma 1
             
             'trimestre_manifiesto': placeholder_final_trimestre,
-            'aplicar_capacitacion': aplicar_capacitacion,
             'label_ce_principal': label_ce_principal,
             # --- INICIO DE LA ADICIÓN (INF007) ---
             'fecha_incumplimiento_larga': (format_date(fecha_inc, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_inc else "N/A").replace("septiembre", "setiembre").replace("Septiembre", "Setiembre"),
             'fecha_extemporanea_larga': (format_date(fecha_ext, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_ext else "N/A").replace("septiembre", "setiembre").replace("Septiembre", "Setiembre"),
             # --- FIN DE LA ADICIÓN ---
-            'tabla_ce1': tabla_ce1,
-            'tabla_ce2': tabla_ce2,
             'tabla_bi': tabla_bi,
             'tabla_multa': tabla_multa,
-            'tabla_detalle_personal': tabla_personal,
-            'num_personal_total_texto': texto_con_numero(num_personal_total, 'f'),
             'multa_original_uit': f"{multa_uit:,.3f} UIT", # Multa original
             'mh_uit': f"{multa_final_del_hecho_uit:,.3f} UIT", # Multa final (con reducción/tope)
             'bi_uit': f"{bi_uit:,.3f} UIT",
-            # --- AÑADIR ESTAS LÍNEAS ---
-            'ce2_monto_soles': f"S/ {res_ce['ce2_soles_calculado']:,.3f}",
-            'ce2_monto_dolares': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}",
-            # --- FIN ---
-            # --- INICIO: ADICIÓN PRECIOS BASE (Simple) ---
-            'ce2_precio_base_soles': f"S/ {ce2_base_precio_soles_simple:,.3f}",
-            'ce2_precio_base_dolares': f"US$ {ce2_base_precio_dolares_simple:,.3f}",
             # --- FIN: ADICIÓN PRECIOS BASE (Simple) ---
             'fuente_cos': res_bi.get('fuente_cos', ''),
             'texto_explicacion_prorrateo': '', # Se genera en app.py
@@ -675,23 +547,28 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
 
         # 6. Generar Anexo CE (Simple)
         anexos_ce = []
-        # Reutilizamos ce1_fmt que ya tiene el formato y el total
+        ce1_fmt = []
+        for idx, item in enumerate(res_ce['ce1_data_raw'], 1):
+            ce1_fmt.append({
+                'descripcion': f"{item.get('descripcion', '')} {idx}/",
+                'cantidad': format_decimal_dinamico(item.get('cantidad', 0)),
+                'horas': format_decimal_dinamico(item.get('horas', 0)),
+                'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}",
+                'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
+                'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}",
+                'monto_dolares': f"US$ {item.get('monto_dolares', 0):,.3f}"
+            })
+        ce1_fmt.append({
+            'descripcion': "Total", 'cantidad': "", 'horas': "", 'precio_soles': "", 'factor_ajuste': "",
+            'monto_soles': f"S/ {res_ce['ce1_soles']:,.3f}", 'monto_dolares': f"US$ {res_ce['ce1_dolares']:,.3f}"
+        })
+        
         tabla_ce1_anx = create_table_subdoc(
             tpl_anexo, 
             ["Descripción", "Cantidad", "Horas", "Precio asociado (S/)", "Factor de ajuste 3/", "Monto (*) (S/)", "Monto (*) (US$) 4/"],
             ce1_fmt, 
             ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
         )
-        tabla_ce2_anx = None
-        if aplicar_capacitacion and res_ce['ce2_data_raw']:
-             tabla_ce2_anx = create_table_subdoc(tpl_anexo, ["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste 2/", "Monto (*) (S/)", "Monto (*) (US$) 3/"],
-                                               ce2_fmt, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
-        
-        resumen_anexo = [{'desc': 'Costo de sistematización y remisión de información - CE1', 'sol': f"S/ {res_ce['ce1_soles']:,.3f}", 'dol': f"US$ {res_ce['ce1_dolares']:,.3f}"}]
-        if aplicar_capacitacion:
-            resumen_anexo.append({'desc': 'Costo de Capacitación al personal - CE2', 'sol': f"S/ {res_ce['ce2_soles_calculado']:,.3f}", 'dol': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}"})
-        resumen_anexo.append({'desc': 'Costo Evitado Total', 'sol': f"S/ {res_ce['ce_soles_para_bi']:,.3f}", 'dol': f"US$ {res_ce['ce_dolares_para_bi']:,.3f}"})
-        tabla_resumen_anx = create_table_subdoc(tpl_anexo, ["Componente", "Monto (*) (S/)", "Monto  (*) (US$)"], resumen_anexo, ['desc', 'sol', 'dol'])
         
         contexto_anx = {
             **contexto_word, # Usar contexto base
@@ -706,26 +583,15 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
                  # --- FIN DE LA CORRECCIÓN DE FORMATO ---
             },
             'tabla_ce1_anexo': tabla_ce1_anx,
-            'tabla_ce2_anexo': tabla_ce2_anx,
-            'tabla_resumen_anexo': tabla_resumen_anx,
             'fuente_salario_ce1': fuentes_ce.get('ce1', {}).get('fuente_salario', ''),
             'pdf_salario_ce1': fuentes_ce.get('ce1', {}).get('pdf_salario', ''),
             'sustento_prof_ce1': fuentes_ce.get('ce1', {}).get('sustento_item_profesional', ''),
             'fuente_coti_ce1': fuentes_ce.get('ce1', {}).get('fuente_coti', ''),
-            'fuente_salario_ce2': fuentes_ce.get('ce2', {}).get('fuente_salario', ''),
-            'pdf_salario_ce2': fuentes_ce.get('ce2', {}).get('pdf_salario', ''),
-            'fuente_coti_ce2': fuentes_ce.get('ce2', {}).get('fuente_coti', ''),
             'fi_mes': fuentes_ce.get('fi_mes', ''),
             'fi_ipc': fuentes_ce.get('fi_ipc', 0),
             'fi_tc': fuentes_ce.get('fi_tc', 0),
-            # --- AÑADIR ESTAS LÍNEAS ---
-            'ce2_monto_soles': f"S/ {res_ce['ce2_soles_calculado']:,.3f}",
-            'ce2_monto_dolares': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}",
-            # --- FIN ---
-            # --- INICIO DE LA ADICIÓN (Anexo Simple) ---
-            'ce2_precio_base_soles': f"S/ {ce2_base_precio_soles_simple:,.3f}",
-            'ce2_precio_base_dolares': f"US$ {ce2_base_precio_dolares_simple:,.3f}",
-            # --- FIN DE LA ADICIÓN ---
+            # --- SOLUCIÓN: Añadir el placeholder faltante ---
+            'ph_ipc_promedio_salario_ce1': fuentes_ce.get('ce1', {}).get('texto_ipc_costeo_salario', ''),
         }
         tpl_anexo.render(contexto_anx, autoescape=True, jinja_env=jinja_env)
         buf_anexo_final = io.BytesIO()
@@ -736,23 +602,18 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
         resultados_app = {
              'extremos': [{
                   'tipo': f"Manifiesto {extremo.get('trimestre')} {extremo.get('anio')} ({tipo_inc})",
-                  'ce1_data': res_ce['ce1_data_raw'], 'ce2_data': res_ce['ce2_data_raw'],
+                  'ce1_data': res_ce['ce1_data_raw'],
                   'ce1_soles': res_ce['ce1_soles'], 'ce1_dolares': res_ce['ce1_dolares'],
-                  'ce2_soles_calculado': res_ce['ce2_soles_calculado'], 'ce2_dolares_calculado': res_ce['ce2_dolares_calculado'],
                   'ce_soles_para_bi': res_ce['ce_soles_para_bi'], 'ce_dolares_para_bi': res_ce['ce_dolares_para_bi'],
                   'bi_data': res_bi.get('table_rows', []), 'bi_uit': bi_uit,
-                  'aplicar_ce2_a_bi': aplicar_capacitacion
              }],
              'totales': {
                   'ce1_total_soles': res_ce['ce1_soles'], 'ce1_total_dolares': res_ce['ce1_dolares'],
-                  'ce2_total_soles_calculado': res_ce['ce2_soles_calculado'], 'ce2_total_dolares_calculado': res_ce['ce2_dolares_calculado'],
                   'ce_total_soles_para_bi': res_ce['ce_soles_para_bi'], 'ce_total_dolares_para_bi': res_ce['ce_dolares_para_bi'],
                   'beneficio_ilicito_uit': bi_uit,
                   'multa_final_uit': multa_uit, # Multa original
                   'bi_data_raw': res_bi.get('table_rows', []),
                   'multa_data_raw': res_multa.get('multa_data_raw', []),
-                  'tabla_personal_data': tabla_pers_data,
-                  'aplicar_ce2_a_bi': aplicar_capacitacion,
                   
                   # --- INICIO: (REQ 1) DATOS DE REDUCCIÓN PARA APP ---
                   'aplica_reduccion': aplica_reduccion_str,
@@ -766,12 +627,9 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
             'doc_pre_compuesto': buf_final_hecho,
             'resultados_para_app': resultados_app,
             'es_extemporaneo': es_ext,
-            'usa_capacitacion': aplicar_capacitacion,
             'anexos_ce_generados': anexos_ce,
             'ids_anexos': list(filter(None, res_ce.get('ids_anexos', set()))),
             'texto_explicacion_prorrateo': '',
-            'tabla_detalle_personal': tabla_personal,
-            'tabla_personal_data': tabla_pers_data
         }
     except Exception as e:
         import traceback; traceback.print_exc()
@@ -806,29 +664,13 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
         # 2. Inicializar acumuladores
         total_bi_uit = 0.0; lista_bi_resultados_completos = []; anexos_ids = set()
         num_hecho = datos_comunes['numero_hecho_actual']; anexos_ce = []; lista_extremos_plantilla_word = []
-        aplicar_capacitacion_general = any(ext.get('tipo_extremo') == 'No presentó' for ext in datos_hecho['extremos'])
-        resultados_app = {'extremos': [], 'totales': {'ce1_total_soles': 0, 'ce1_total_dolares': 0, 'ce2_total_soles_calculado': 0, 'ce2_total_dolares_calculado': 0, 'ce_total_soles_para_bi': 0, 'ce_total_dolares_para_bi': 0, 'aplicar_ce2_a_bi': aplicar_capacitacion_general}}
-
-        # 3. Generar Tabla Personal (si aplica)
-        tabla_pers_subdoc_final = None
-        tabla_pers_data = []
-        num_pers_total_int = 0
-        if aplicar_capacitacion_general:
-            tabla_pers_render = datos_hecho.get('tabla_personal', [])
-            tabla_pers_sin_total = []
-            for fila in tabla_pers_render:
-                perfil = fila.get('Perfil'); cantidad = pd.to_numeric(fila.get('Cantidad'), errors='coerce')
-                if perfil and cantidad > 0: tabla_pers_sin_total.append({'Perfil': perfil, 'Descripción': fila.get('Descripción', ''), 'Cantidad': int(cantidad)})
-            num_pers_total_int = int(datos_hecho.get('num_personal_capacitacion', 0))
-            tabla_pers_data = tabla_pers_sin_total + [{'Perfil':'Total', 'Descripción':'', 'Cantidad': num_pers_total_int}]
-            tabla_pers_subdoc_final = create_personal_table_subdoc(tpl_principal, ["Perfil (1)", "Descripción", "Cantidad"], tabla_pers_data, ['Perfil', 'Descripción', 'Cantidad'], column_widths=(2,3,1), texto_posterior="Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.")
+        resultados_app = {'extremos': [], 'totales': {'ce1_total_soles': 0, 'ce1_total_dolares': 0, 'ce_total_soles_para_bi': 0, 'ce_total_dolares_para_bi': 0}}
 
         # 4. Iterar sobre cada extremo
         for j, extremo in enumerate(datos_hecho['extremos']):
             # a. Calcular CE
             res_ce = _calcular_costo_evitado_extremo_inf007(datos_comunes, datos_hecho, extremo)
             if res_ce.get('error'): st.error(f"Error CE Extremo {j+1}: {res_ce['error']}"); continue
-            aplicar_ce2_bi_extremo = res_ce['aplicar_ce2_a_bi']
 
             # b. Calcular BI
             tipo_inc, fecha_inc, fecha_ext = extremo.get('tipo_extremo'), extremo.get('fecha_incumplimiento'), extremo.get('fecha_extemporanea')
@@ -842,80 +684,39 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             anexos_ids.update(res_ce.get('ids_anexos', set()))
             resultados_app['totales']['ce1_total_soles'] += res_ce.get('ce1_soles', 0.0)
             resultados_app['totales']['ce1_total_dolares'] += res_ce.get('ce1_dolares', 0.0)
-            resultados_app['totales']['ce2_total_soles_calculado'] += res_ce.get('ce2_soles_calculado', 0.0)
-            resultados_app['totales']['ce2_total_dolares_calculado'] += res_ce.get('ce2_dolares_calculado', 0.0)
             resultados_app['totales']['ce_total_soles_para_bi'] += res_ce['ce_soles_para_bi']
             resultados_app['totales']['ce_total_dolares_para_bi'] += res_ce['ce_dolares_para_bi']
             resultados_app['extremos'].append({ 
                 'tipo': f"Manifiesto {extremo.get('trimestre')} {extremo.get('anio')} ({tipo_inc})",
-                'ce1_data': res_ce['ce1_data_raw'], 'ce2_data': res_ce['ce2_data_raw'], 
+                'ce1_data': res_ce['ce1_data_raw'],
                 'ce1_soles': res_ce['ce1_soles'], 'ce1_dolares': res_ce['ce1_dolares'],
-                'ce2_soles_calculado': res_ce['ce2_soles_calculado'], 'ce2_dolares_calculado': res_ce['ce2_dolares_calculado'],
                 'ce_soles_para_bi': res_ce['ce_soles_para_bi'], 'ce_dolares_para_bi': res_ce['ce_dolares_para_bi'],
                 'bi_data': res_bi_parcial.get('table_rows', []), 'bi_uit': bi_uit, 
-                'aplicar_ce2_a_bi': aplicar_ce2_bi_extremo
             })
             lista_bi_resultados_completos.append(res_bi_parcial)
 
-            # d. Generar Anexo CE del extremo (Formato INF004)
+            # d. Generar Anexo CE del extremo (Formato Limpio)
             tpl_anx_loop = DocxTemplate(io.BytesIO(buffer_anexo.getvalue()))
             
-            # --- Formato CE1 Anexo ---
             ce1_fmt_anx = []
-            for i, item in enumerate(res_ce['ce1_data_raw']):
-                desc_orig = item.get('descripcion', '')
-                texto_adicional = f"{i+1}/ "
+            for idx, item in enumerate(res_ce['ce1_data_raw'], 1):
                 ce1_fmt_anx.append({
-                    'descripcion': f"{desc_orig} {texto_adicional}", 'cantidad': format_decimal_dinamico(item.get('cantidad', 0)), 'horas': format_decimal_dinamico(item.get('horas', 0)),
-                    'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}", 'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
-                    'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}", 'monto_dolares': f"US$ {item.get('monto_dolares', 0):,.3f}"
+                    'descripcion': f"{item.get('descripcion', '')} {idx}/",
+                    'cantidad': format_decimal_dinamico(item.get('cantidad', 0)),
+                    'horas': format_decimal_dinamico(item.get('horas', 0)),
+                    'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}",
+                    'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
+                    'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}",
+                    'monto_dolares': f"US$ {item.get('monto_dolares', 0):,.3f}"
                 })
-            ce1_fmt_anx.append({'descripcion': 'Total', 'monto_soles': f"S/ {res_ce['ce1_soles']:,.3f}", 'monto_dolares': f"US$ {res_ce['ce1_dolares']:,.3f}"})
-            
-            tabla_ce1_anx = create_table_subdoc(
-                tpl_anx_loop, 
-                ["Descripción", "Cantidad", "Horas", "Precio asociado (S/)", "Factor de ajuste 3/", "Monto (*) (S/)", "Monto (*) (US$) 4/"],
-                ce1_fmt_anx, 
-                ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
-            )
-
-            # --- Formato CE2 Anexo ---
-            tabla_ce2_anx = None
-            ce2_fmt_anx = []
-            if aplicar_ce2_bi_extremo and res_ce['ce2_data_raw']:
-                for i, item in enumerate(res_ce['ce2_data_raw']):
-                    ce2_fmt_anx.append({
-                        'descripcion': f"{item.get('descripcion', '')} {i+1}/",
-                        'precio_dolares': f"US$ {item.get('precio_dolares', 0):,.3f}", 'precio_soles': f"S/ {item.get('precio_soles', 0):,.3f}",
-                        'factor_ajuste': f"{item.get('factor_ajuste', 0):,.3f}",
-                        'monto_soles': f"S/ {item.get('monto_soles', 0):,.3f}", 'monto_dolares': f"US$ {item.get('monto_dolares', 0):,.3f}"
-                    })
-                ce2_fmt_anx.append({'descripcion': 'Total', 'monto_soles': f"S/ {res_ce['ce2_soles_calculado']:,.3f}", 'monto_dolares': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}"})
-                tabla_ce2_anx = create_table_subdoc(tpl_anx_loop, ["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste 2/", "Monto (*) (S/)", "Monto (*) (US$) 3/"],
-                                                  ce2_fmt_anx, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
-
-            # --- Formato Resumen Anexo ---
-            resumen_anexo = [{'desc': 'Costo de sistematización y remisión de información - CE1', 'sol': f"S/ {res_ce['ce1_soles']:,.3f}", 'dol': f"US$ {res_ce['ce1_dolares']:,.3f}"}]
-            if aplicar_ce2_bi_extremo:
-                resumen_anexo.append({'desc': 'Costo de capacitación al personal - CE2', 'sol': f"S/ {res_ce['ce2_soles_calculado']:,.3f}", 'dol': f"US$ {res_ce['ce2_dolares_calculado']:,.3f}"})
-            resumen_anexo.append({'desc': 'Costo Evitado Total', 'sol': f"S/ {res_ce['ce_soles_para_bi']:,.3f}", 'dol': f"US$ {res_ce['ce_dolares_para_bi']:,.3f}"})
-            tabla_resumen_anx = create_table_subdoc(tpl_anx_loop, ["Componente", "Monto (*) (S/)", "Monto (*) (US$)"], resumen_anexo, ['desc', 'sol', 'dol'])
+            ce1_fmt_anx.append({
+                'descripcion': "Total", 'cantidad': "", 'horas': "", 'precio_soles': "", 'factor_ajuste': "",
+                'monto_soles': f"S/ {res_ce['ce1_soles']:,.3f}", 'monto_dolares': f"US$ {res_ce['ce1_dolares']:,.3f}"
+            })
+            tabla_ce1_anx = create_table_subdoc(tpl_anx_loop, ["Descripción", "Cantidad", "Horas", "Precio asociado (S/)", "Factor de ajuste 3/", "Monto (*) (S/)", "Monto (*) (US$) 4/"], ce1_fmt_anx, ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
 
             # --- Contexto Anexo ---
             fuentes_ce = res_ce.get('fuentes', {})
-
-            # --- INICIO: Buscar Precios Base de CE2 (para Anexo Múltiple) ---
-            ce2_base_precio_soles_anexo = 0.0
-            ce2_base_precio_dolares_anexo = 0.0
-            if aplicar_ce2_bi_extremo and res_ce.get('ce2_data_raw'):
-                try:
-                    # Toma el precio del primer ítem de capacitación de este extremo
-                    primer_item_ce2_anexo = res_ce['ce2_data_raw'][0]
-                    ce2_base_precio_soles_anexo = primer_item_ce2_anexo.get('precio_soles', 0.0)
-                    ce2_base_precio_dolares_anexo = primer_item_ce2_anexo.get('precio_dolares', 0.0)
-                except IndexError:
-                    pass # ce2_data_raw existe pero está vacío
-            # --- FIN: Buscar Precios Base de CE2 (para Anexo Múltiple) ---
 
             contexto_anx = {
                 **datos_comunes['context_data'],
@@ -934,23 +735,15 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
                     # --- FIN DE LA CORRECCIÓN DE FORMATO ---
                 },
                 'tabla_ce1_anexo': tabla_ce1_anx,
-                'tabla_ce2_anexo': tabla_ce2_anx,
-                'tabla_resumen_anexo': tabla_resumen_anx,
-                'aplicar_capacitacion': aplicar_ce2_bi_extremo,
                 'fuente_salario_ce1': fuentes_ce.get('ce1', {}).get('fuente_salario', ''),
                 'pdf_salario_ce1': fuentes_ce.get('ce1', {}).get('pdf_salario', ''),
                 'sustento_prof_ce1': fuentes_ce.get('ce1', {}).get('sustento_item_profesional', ''),
                 'fuente_coti_ce1': fuentes_ce.get('ce1', {}).get('fuente_coti', ''),
-                'fuente_salario_ce2': fuentes_ce.get('ce2', {}).get('fuente_salario', ''),
-                'pdf_salario_ce2': fuentes_ce.get('ce2', {}).get('pdf_salario', ''),
-                'fuente_coti_ce2': fuentes_ce.get('ce2', {}).get('fuente_coti', ''),
                 'fi_mes': fuentes_ce.get('fi_mes', ''),
                 'fi_ipc': fuentes_ce.get('fi_ipc', 0),
                 'fi_tc': fuentes_ce.get('fi_tc', 0),
-                # --- INICIO DE LA ADICIÓN (Anexo Múltiple) ---
-                'ce2_precio_base_soles': f"S/ {ce2_base_precio_soles_anexo:,.3f}",
-                'ce2_precio_base_dolares': f"US$ {ce2_base_precio_dolares_anexo:,.3f}",
-                # --- FIN DE LA ADICIÓN ---
+                # --- SOLUCIÓN: Añadir el placeholder faltante ---
+                'ph_ipc_promedio_salario_ce1': fuentes_ce.get('ce1', {}).get('texto_ipc_costeo_salario', ''),
             }
             tpl_anx_loop.render(contexto_anx, autoescape=True, jinja_env=jinja_env); 
             buf_anx = io.BytesIO(); tpl_anx_loop.save(buf_anx); anexos_ce.append(buf_anx)
@@ -962,26 +755,48 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
                 ce1_fmt_anx, # Reutiliza ce1_fmt_anx que ya está formateado
                 ['descripcion', 'cantidad', 'horas', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares']
             )
-            tabla_ce2_cuerpo = None
-            if aplicar_ce2_bi_extremo and res_ce['ce2_data_raw']: 
-                tabla_ce2_cuerpo = create_table_subdoc(tpl_principal, ["Descripción", "Precio (US$)", "Precio (S/)", "Factor de ajuste 2/", "Monto (*) (S/)", "Monto (*) (US$) 3/"],
-                                                      ce2_fmt_anx, ['descripcion', 'precio_dolares', 'precio_soles', 'factor_ajuste', 'monto_soles', 'monto_dolares'])
-            
-            # --- Tabla BI (con superíndices) ---
-            filas_bi_crudas_ext, fn_map_ext, fn_data_ext = res_bi_parcial.get('table_rows', []), res_bi_parcial.get('footnote_mapping', {}), res_bi_parcial.get('footnote_data', {})
+
+            # --- INICIO LÓGICA CORREGIDA: Preparar datos BI CON superíndices y reordenamiento ---
+            filas_bi_crudas_ext, fn_map_orig_ext, fn_data_ext = res_bi_parcial.get('table_rows', []), res_bi_parcial.get('footnote_mapping', {}), res_bi_parcial.get('footnote_data', {})
             es_ext_iter = (tipo_inc == "Presentó fuera de plazo")
-            fn_list_ext = [f"({l}) {obtener_fuente_formateada(k, fn_data_ext, id_infraccion, es_ext_iter)}" for l, k in sorted(fn_map_ext.items())]
-            fn_data_dict_ext = {'list': fn_list_ext, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+
+            # 1. Identificar letras realmente usadas
+            letras_usadas_ext = sorted(list({r for f in filas_bi_crudas_ext if f.get('ref') for r in f.get('ref').replace(" ", "").split(",") if r}))
+            
+            # 2. Re-mapear letras (a, b, c...)
+            letras_base = "abcdefghijklmnopqrstuvwxyz"
+            map_traduccion_ext = {v: letras_base[i] for i, v in enumerate(letras_usadas_ext)}
+            nuevo_fn_map_ext = {map_traduccion_ext[v]: fn_map_orig_ext[v] for v in letras_usadas_ext if v in fn_map_orig_ext}
+
+            # 3. Preparar filas de datos combinando superíndices
             filas_bi_con_superindice = []
             for fila in filas_bi_crudas_ext:
-                nueva_fila = fila.copy(); ref_letra = nueva_fila.get('ref')
-                texto_base = str(nueva_fila.get('descripcion_texto', '')); super_existente = str(nueva_fila.get('descripcion_superindice', ''))
-                if ref_letra: super_existente += f"({ref_letra})"
-                nueva_fila['descripcion_texto'] = texto_base; nueva_fila['descripcion_superindice'] = super_existente
+                nueva_fila = fila.copy()
+                ref_orig = nueva_fila.get('ref', '')
+                super_final = str(nueva_fila.get('descripcion_superindice', ''))
+                
+                if ref_orig:
+                    nuevas = [map_traduccion_ext[r] for r in ref_orig.replace(" ", "").split(",") if r in map_traduccion_ext]
+                    if nuevas: super_final += f"({', '.join(nuevas)})"
+                
+                nueva_fila['descripcion_texto'] = str(nueva_fila.get('descripcion_texto', nueva_fila.get('descripcion', '')))
+                nueva_fila['descripcion_superindice'] = super_final
                 filas_bi_con_superindice.append(nueva_fila)
-            tabla_bi_cuerpo = create_main_table_subdoc(tpl_principal, ["Descripción", "Monto"], filas_bi_con_superindice,
-                                                     keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict_ext, column_widths=(5, 1))
 
+            # 4. Preparar lista de fuentes finales
+            fn_list_ext = [f"({l}) {obtener_fuente_formateada(k, fn_data_ext, id_infraccion, es_ext_iter)}" for l, k in sorted(nuevo_fn_map_ext.items())]
+            fn_data_dict_ext = {'list': fn_list_ext, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
+
+            # Crear tabla BI del cuerpo
+            tabla_bi_cuerpo = create_main_table_subdoc(
+                tpl_principal,
+                ["Descripción", "Monto"],
+                filas_bi_con_superindice,
+                keys=['descripcion_texto', 'monto'],
+                footnotes_data=fn_data_dict_ext,
+                column_widths=(5, 1)
+            )
+            # --- FIN LÓGICA CORREGIDA ---
             # --- INICIO: Formatear Trimestre (Req. 1) ---
             trimestre_str_largo = extremo.get('trimestre', 'N/A')
             anio_str = extremo.get('anio', 'N/A')
@@ -997,7 +812,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             placeholder_final_trimestre = f"{trimestre_formateado} de {anio_str}"
             # --- FIN: Formatear Trimestre (Req. 1) ---
 
-            label_ce_extremo = "CE1" if aplicar_ce2_bi_extremo else "CE"
+            label_ce_extremo = "CE"
             # f. Añadir datos del extremo a la lista para el bucle
             lista_extremos_plantilla_word.append({
                 'loop_index': j + 1,
@@ -1012,17 +827,16 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
                 # --- INICIO DE LA ADICIÓN (INF007) ---
                 'fecha_incumplimiento_larga': (format_date(fecha_inc, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_inc else "N/A").replace("septiembre", "setiembre").replace("Septiembre", "Setiembre"),
                 'fecha_extemporanea_larga': (format_date(fecha_ext, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_ext else "N/A").replace("septiembre", "setiembre").replace("Septiembre", "Setiembre"),
-                # --- FIN DE LA ADICIÓN ---
-                'tabla_ce1': tabla_ce1_cuerpo,
-                'tabla_ce2': tabla_ce2_cuerpo,
-                'aplicar_capacitacion': aplicar_ce2_bi_extremo,
+
                 'tabla_bi': tabla_bi_cuerpo,
                 'bi_uit_extremo': f"{bi_uit:,.3f} UIT",
+                'es_extemporaneo': es_ext_iter,
                 'texto_razonabilidad': RichText(""), # Placeholder si INF007 necesita texto de razonabilidad
                 # --- INICIO DE LA CORRECCIÓN DE FORMATO ---
                 'fecha_max_presentacion': format_date(extremo.get('fecha_maxima_presentacion'), "d 'de' MMMM 'de' yyyy", locale='es') if extremo.get('fecha_maxima_presentacion') else "N/A",
                 'fecha_extemporanea': format_date(fecha_ext, "d 'de' MMMM 'de' yyyy", locale='es') if fecha_ext else "N/A",
                 # --- FIN DE LA CORRECCIÓN DE FORMATO ---
+                'ph_ipc_promedio_salario_ce1': fuentes_ce.get('ce1', {}).get('texto_ipc_costeo_salario', ''),
             })
         # --- FIN DEL BUCLE DE EXTREMOS ---
 
@@ -1075,22 +889,6 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             texto_desglose_bi = ", ".join(lista_desglose[:-1]) + ", y " + lista_desglose[-1]
         # --- FIN: Generar Texto Desglose BI (Req. 2) ---
 
-        # --- INICIO: Buscar Precios Base de CE2 (Múltiple) ---
-        ce2_base_precio_soles = 0.0
-        ce2_base_precio_dolares = 0.0
-        if aplicar_capacitacion_general:
-            for extremo_res in resultados_app.get('extremos', []):
-                if extremo_res.get('ce2_data'):
-                    try:
-                        # Tomar el precio del primer ítem de la primera capacitación encontrada
-                        primer_item_ce2 = extremo_res['ce2_data'][0]
-                        ce2_base_precio_soles = primer_item_ce2.get('precio_soles', 0.0)
-                        ce2_base_precio_dolares = primer_item_ce2.get('precio_dolares', 0.0)
-                        break # Salir en cuanto se encuentre el primer precio
-                    except IndexError:
-                        continue # Este extremo tiene 'ce2_data' pero está vacío, buscar en el siguiente
-        # --- FIN: Buscar Precios Base de CE2 (Múltiple) ---
-
         # --- AÑADIR ESTA LÍNEA ---
         es_ext = any(e.get('tipo_extremo') == 'Presentó fuera de plazo' for e in datos_hecho['extremos'])
         # 6. Contexto Final y Renderizado
@@ -1109,21 +907,8 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             'multa_original_uit': f"{multa_final_uit:,.3f} UIT", # Multa original
             'mh_uit': f"{multa_final_del_hecho_uit:,.3f} UIT", # Multa final (con reducción/tope)
             'tabla_multa_final': tabla_multa_final_subdoc,
-            'tabla_detalle_personal': tabla_pers_subdoc_final,
-            'se_usa_capacitacion': aplicar_capacitacion_general,
-            'num_personal_total_texto': texto_con_numero(num_pers_total_int, 'f') if aplicar_capacitacion_general else '',
             'texto_explicacion_prorrateo': '', # Se genera en app.py
             
-            # --- AÑADIR ESTAS LÍNEAS ---
-            'ce2_monto_soles': f"S/ {resultados_app['totales']['ce2_total_soles_calculado']:,.3f}",
-            'ce2_monto_dolares': f"US$ {resultados_app['totales']['ce2_total_dolares_calculado']:,.3f}",
-            # --- FIN ---
-
-            # --- INICIO: ADICIÓN PRECIOS BASE (Múltiple) ---
-            'ce2_precio_base_soles': f"S/ {ce2_base_precio_soles:,.3f}",
-            'ce2_precio_base_dolares': f"US$ {ce2_base_precio_dolares:,.3f}",
-            # --- FIN: ADICIÓN PRECIOS BASE (Múltiple) ---
-
             # --- INICIO: (REQ 1) PLACEHOLDERS DE REDUCCIÓN Y TOPE ---
             'aplica_reduccion': aplica_reduccion_str == 'Sí',
             'porcentaje_reduccion': porcentaje_str,
@@ -1147,7 +932,6 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             'multa_data_raw': res_multa_final.get('multa_data_raw', []), 
             'multa_final_uit': multa_final_uit, # Multa original
             'bi_data_raw': lista_bi_resultados_completos, 
-            'tabla_personal_data': tabla_pers_data,
             
             # --- INICIO: (REQ 1) DATOS DE REDUCCIÓN PARA APP ---
             'aplica_reduccion': aplica_reduccion_str,
@@ -1162,12 +946,9 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             'doc_pre_compuesto': buf_final,
             'resultados_para_app': resultados_app,
             'texto_explicacion_prorrateo': '',
-            'tabla_detalle_personal': tabla_pers_subdoc_final,
-            'usa_capacitacion': aplicar_capacitacion_general,
             'es_extemporaneo': any(e.get('tipo_extremo') == 'Presentó fuera de plazo' for e in datos_hecho['extremos']),
             'anexos_ce_generados': anexos_ce,
             'ids_anexos': list(filter(None, anexos_ids)),
-            'tabla_personal_data': tabla_pers_data
             # --- NOTA: Los datos de reducción se leen desde resultados_app['totales'] ---
         }
     except Exception as e:
