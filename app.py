@@ -9,7 +9,8 @@ import pandas as pd
 import importlib
 from docx import Document
 from docx.enum.text import WD_ALIGN_PARAGRAPH                  
-from docxcompose.composer import Composer 
+from docxcompose.composer import Composer
+from streamlit_pdf_viewer import pdf_viewer
 from docxtpl import DocxTemplate, RichText
 import mammoth
 from num2words import num2words
@@ -2969,10 +2970,8 @@ if cliente_gspread:
                                     with open(temp_pdf_path, "rb") as f_pdf:
                                         pdf_preview_bytes = f_pdf.read()
                                     
-                                    # Convertir a Base64 y mostrar en el iframe
-                                    base64_pdf = base64.b64encode(pdf_preview_bytes).decode('utf-8')
-                                    pdf_display = f'<iframe src="data:application/pdf;base64,{base64_pdf}" width="100%" height="800px" type="application/pdf"></iframe>'
-                                    st.markdown(pdf_display, unsafe_allow_html=True)
+                                    # Mostrar usando el visor nativo de Streamlit (Sin bloqueos de Chrome)
+                                    pdf_viewer(input=pdf_preview_bytes, width=700, height=800)
                                 else:
                                     st.error("Error: LibreOffice se ejecutó pero no generó el PDF.")
 
