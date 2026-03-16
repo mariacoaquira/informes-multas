@@ -855,7 +855,7 @@ from textos_manager import obtener_fuente_formateada # Needed for the helper fun
 
 # In funciones.py
 
-def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total_bi_uit, footnotes_data=None, map_texto_a_letra=None, map_clave_a_texto=None):
+def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total_bi_uit, footnotes_data=None, map_texto_a_letra=None, map_clave_a_texto=None, return_raw_data=False):
     """
     Creates the consolidated BI table, assigning superscripts correctly using the provided maps.
     (Version ensuring all helper calls include map arguments).
@@ -911,12 +911,16 @@ def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total
     # --- End Helper Function ---
 
 
-    # 1. Extract common rows (no changes here)
+    # 1. Extract common rows (con búsqueda inteligente de descripción)
     primer_resultado = resultados_extremos[0]
-    cos_anual_row = next((row for row in primer_resultado.get('table_rows', []) if 'COS (anual)' in row.get('descripcion', '')), None)
-    cosm_row = next((row for row in primer_resultado.get('table_rows', []) if 'COSm (mensual)' in row.get('descripcion', '')), None)
-    tc_row = next((row for row in primer_resultado.get('table_rows', []) if 'Tipo de cambio' in row.get('descripcion', '')), None)
-    uit_row = next((row for row in primer_resultado.get('table_rows', []) if 'Unidad Impositiva' in row.get('descripcion', '')), None)
+    
+    def get_desc(row):
+        return row.get('descripcion_texto', row.get('descripcion', ''))
+
+    cos_anual_row = next((row for row in primer_resultado.get('table_rows', []) if 'COS (anual)' in get_desc(row)), None)
+    cosm_row = next((row for row in primer_resultado.get('table_rows', []) if 'COSm (mensual)' in get_desc(row)), None)
+    tc_row = next((row for row in primer_resultado.get('table_rows', []) if 'Tipo de cambio' in get_desc(row)), None)
+    uit_row = next((row for row in primer_resultado.get('table_rows', []) if 'Unidad Impositiva' in get_desc(row)), None)
 
     # 2. Assemble the final table row by row, ensuring maps are passed to helper
     # Add CE rows for each extreme
@@ -924,8 +928,9 @@ def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total
         if res.get('table_rows'):
             ce_row_orig = res['table_rows'][0]
             letra_super = get_final_letter_for_row(ce_row_orig, i, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
+            desc_orig = get_desc(ce_row_orig)
             filas_para_tabla_final.append({
-                'descripcion_texto': f"{ce_row_orig.get('descripcion', '').split(' [Extremo')[0]} [Extremo {i+1}]",
+                'descripcion_texto': f"{desc_orig.split(' [Extremo')[0]} - Extremo n.° {i+1}",
                 'descripcion_superindice': letra_super,
                 'monto': ce_row_orig.get('monto', '')
             })
@@ -933,18 +938,19 @@ def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total
     # Add common rows (COS, COSm)
     if cos_anual_row:
         letra_super = get_final_letter_for_row(cos_anual_row, 0, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
-        filas_para_tabla_final.append({'descripcion_texto': cos_anual_row.get('descripcion',''), 'descripcion_superindice': letra_super, 'monto': cos_anual_row.get('monto','')})
+        filas_para_tabla_final.append({'descripcion_texto': get_desc(cos_anual_row), 'descripcion_superindice': letra_super, 'monto': cos_anual_row.get('monto','')})
     if cosm_row:
          letra_super = get_final_letter_for_row(cosm_row, 0, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
-         filas_para_tabla_final.append({'descripcion_texto': cosm_row.get('descripcion',''), 'descripcion_superindice': letra_super, 'monto': cosm_row.get('monto','')})
+         filas_para_tabla_final.append({'descripcion_texto': get_desc(cosm_row), 'descripcion_superindice': letra_super, 'monto': cosm_row.get('monto','')})
 
     # Add T rows for each extreme
     for i, res in enumerate(resultados_extremos):
-        t_row_orig = next((row for row in res.get('table_rows', []) if 'T: meses' in row.get('descripcion', '')), None)
+        t_row_orig = next((row for row in res.get('table_rows', []) if 'T: meses' in get_desc(row)), None)
         if t_row_orig:
             letra_super = get_final_letter_for_row(t_row_orig, i, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
+            desc_orig = get_desc(t_row_orig)
             filas_para_tabla_final.append({
-                'descripcion_texto': f"{t_row_orig.get('descripcion', '').split(' [Extremo')[0]} [Extremo {i+1}]",
+                'descripcion_texto': f"{desc_orig.split(' [Extremo')[0]} - Extremo n.° {i+1}",
                 'descripcion_superindice': letra_super,
                 'monto': t_row_orig.get('monto', '')
             })
@@ -952,12 +958,13 @@ def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total
     # Add adjusted cost rows and calculate total
     costos_ajustados_soles = []
     for i, res in enumerate(resultados_extremos):
-         ajustado_row_orig = next((row for row in res.get('table_rows', []) if 'Costo evitado ajustado' in row.get('descripcion', '')), None)
+         ajustado_row_orig = next((row for row in res.get('table_rows', []) if 'Costo evitado ajustado' in get_desc(row)), None)
          if ajustado_row_orig:
             letra_super = get_final_letter_for_row(ajustado_row_orig, i, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
             monto_str = ajustado_row_orig.get('monto', '')
+            desc_orig = get_desc(ajustado_row_orig)
             filas_para_tabla_final.append({
-                 'descripcion_texto': f"{ajustado_row_orig.get('descripcion', '').split(' [Extremo')[0]} [Extremo {i+1}]",
+                'descripcion_texto': f"{desc_orig.split(' [Extremo')[0]} - Extremo n.° {i+1}",
                  'descripcion_superindice': letra_super,
                  'monto': monto_str
             })
@@ -968,22 +975,37 @@ def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total
                  costos_ajustados_soles.append(0.0)
 
     total_ajustado_soles = sum(costos_ajustados_soles)
-    filas_para_tabla_final.append({'descripcion_texto': 'Costo evitado ajustado total (S/)', 'descripcion_superindice': '', 'monto': f"S/ {total_ajustado_soles:,.3f}"})
 
     if tc_row:
-        letra_super = get_final_letter_for_row(tc_row, 0, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
-        filas_para_tabla_final.append({'descripcion_texto': tc_row.get('descripcion',''), 'descripcion_superindice': letra_super, 'monto': tc_row.get('monto','')})
-
-    filas_para_tabla_final.append({'descripcion_texto': 'Beneficio ilícito (S/)', 'descripcion_superindice': letra_super, 'monto': f"S/ {total_ajustado_soles:,.3f}"})
+        # Si hay TC, el costo evitado ajustado estaba en Dólares.
+        filas_para_tabla_final.append({'descripcion_texto': 'Costo evitado ajustado total (US$)', 'descripcion_superindice': '', 'monto': f"US$ {total_ajustado_soles:,.3f}"})
+        
+        letra_super = get_final_letter_for_row(tc_row, 0, map_clave_a_texto, map_texto_a_letra)
+        filas_para_tabla_final.append({'descripcion_texto': get_desc(tc_row), 'descripcion_superindice': letra_super, 'monto': tc_row.get('monto','')})
+        
+        # Sumar los Beneficios Ilícitos en Soles reales de cada extremo
+        bi_soles_sum = 0
+        for res in resultados_extremos:
+            bi_row = next((row for row in res.get('table_rows', []) if 'Beneficio ilícito (S/)' in get_desc(row)), None)
+            if bi_row:
+                try:
+                    numeric_part = bi_row.get('monto', '').replace('S/','').replace('US$','').replace(',','').strip()
+                    bi_soles_sum += float(numeric_part)
+                except: pass
+        
+        filas_para_tabla_final.append({'descripcion_texto': 'Beneficio ilícito (S/)', 'descripcion_superindice': '', 'monto': f"S/ {bi_soles_sum:,.3f}"})
+    else:
+        # Si no hay TC, el total ajustado equivale al Beneficio Ilícito (S/). Omitimos la fila repetida.
+        filas_para_tabla_final.append({'descripcion_texto': 'Beneficio ilícito (S/)', 'descripcion_superindice': '', 'monto': f"S/ {total_ajustado_soles:,.3f}"})
 
     if uit_row:
-        letra_super = get_final_letter_for_row(uit_row, 0, map_clave_a_texto, map_texto_a_letra) # <-- Pass maps
-        filas_para_tabla_final.append({'descripcion_texto': uit_row.get('descripcion',''), 'descripcion_superindice': letra_super, 'monto': uit_row.get('monto','')})
+        letra_super = get_final_letter_for_row(uit_row, 0, map_clave_a_texto, map_texto_a_letra)
+        filas_para_tabla_final.append({'descripcion_texto': get_desc(uit_row), 'descripcion_superindice': letra_super, 'monto': uit_row.get('monto','')})
 
     filas_para_tabla_final.append({'descripcion_texto': 'Beneficio Ilícito (UIT)', 'descripcion_superindice': '', 'monto': f"{total_bi_uit:,.3f} UIT"})
 
     # 3. Call create_main_table_subdoc
-    return create_main_table_subdoc(
+    subdoc = create_main_table_subdoc(
         doc_template,
         headers=["Descripción", "Monto"],
         data=filas_para_tabla_final,
@@ -991,6 +1013,10 @@ def create_consolidated_bi_table_subdoc(doc_template, resultados_extremos, total
         footnotes_data=footnotes_data,
         column_widths=(5, 1.5)
     )
+    
+    if return_raw_data:
+        return subdoc, filas_para_tabla_final
+    return subdoc
 
 def _replace_in_paragraph(p, pattern, numbering_manager):
     full_text = "".join(run.text for run in p.runs)
