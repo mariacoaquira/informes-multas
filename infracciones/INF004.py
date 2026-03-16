@@ -92,30 +92,61 @@ def _calcular_costo_evitado_parcial(datos_comunes, horas_para_este_extremo, item
         }
 
         # 5. Main loop - Receta INF004
-        receta_df = df_items_infracciones[df_items_infracciones['ID_Infraccion'] == id_infraccion]
+        # --- NUEVO MÉTODO DE BÚSQUEDA ROBUSTA (Infracción y Rubros) ---
+        id_inf_str = str(id_infraccion).strip()
+        id_inf_base = id_inf_str.split('.')[0] # Extrae "INF004" de "INF004.1"
+        
+        # Buscar por ID exacto primero, si no, buscar por ID Base
+        receta_df = df_items_infracciones[df_items_infracciones['ID_Infraccion'].astype(str).str.strip() == id_inf_str]
         if receta_df.empty:
-             result['error'] = f"No se encontró receta para la infracción {id_infraccion}."
+            receta_df = df_items_infracciones[df_items_infracciones['ID_Infraccion'].astype(str).str.strip() == id_inf_base]
+
+        if receta_df.empty:
+             result['error'] = f"No se encontró receta para la infracción {id_inf_str} ni {id_inf_base}."
              return result
 
         for _, item_receta in receta_df.iterrows():
-            id_item_a_buscar = item_receta['ID_Item_Infraccion']
-            descripcion_insumo_receta = item_receta.get('Nombre_Item', 'N/A')
+            # --- INICIO: Búsqueda a prueba de fallos y comas (Estilo INF008 + Limpieza decimales) ---
+            id_item_raw = item_receta.get('ID_Item')
+            if pd.isna(id_item_raw) or id_item_raw == '':
+                id_item_raw = item_receta.get('ID_Item_Infraccion', '')
+            
+            # Limpiar decimales fantasma (1.0 -> 1) y nulos
+            id_items_str = str(id_item_raw).replace('.0', '').strip()
+            if id_items_str.lower() == 'nan': id_items_str = ''
+            
+            # Soporta varios IDs separados por comas
+            lista_ids_buscar = [x.strip() for x in id_items_str.split(',') if x.strip()]
+            descripcion_insumo_receta = str(item_receta.get('Nombre_Item', 'N/A')).strip()
 
-            # --- Cost Search Logic (no cambia) ---
-            # ... (todo el bloque de búsqueda de costos se queda igual) ...
-            posibles_costos = df_costos_items[df_costos_items['ID_Item_Infraccion'] == id_item_a_buscar].copy()
+            # Detectar nombre de columna
+            col_id_costos = 'ID_Item' if 'ID_Item' in df_costos_items.columns else 'ID_Item_Infraccion'
+            
+            # Limpiar la base de datos de '.0' antes de buscar
+            costos_ids_limpios = df_costos_items[col_id_costos].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
+            posibles_costos = df_costos_items[costos_ids_limpios.isin(lista_ids_buscar)].copy()
+            
             if posibles_costos.empty: continue
-            tipo_item_receta = item_receta.get('Tipo_Item'); df_candidatos = pd.DataFrame()
+            
+            tipo_item_receta = str(item_receta.get('Tipo_Item', '')).strip()
+            df_candidatos = pd.DataFrame()
+            
             if tipo_item_receta == 'Variable':
-                 id_rubro_str = str(id_rubro) if id_rubro is not None else ''
+                 id_rubro_str = str(id_rubro).replace('.0', '').strip() if id_rubro is not None else ''
                  if id_rubro_str:
-                     posibles_costos['ID_Rubro'] = posibles_costos['ID_Rubro'].astype(str).fillna('')
-                     df_candidatos = posibles_costos[posibles_costos['ID_Rubro'].str.contains(fr'\b{id_rubro_str}\b', regex=True, na=False)].copy()
+                     # Búsqueda Regex exacta (Como en INF008)
+                     mask_rubro = posibles_costos['ID_Rubro'].astype(str).str.contains(fr'\b{id_rubro_str}\b', regex=True, na=False)
+                     df_candidatos = posibles_costos[mask_rubro].copy()
+                     
+                 # Fallback a costos generales
                  if df_candidatos.empty:
-                      df_candidatos = posibles_costos[posibles_costos['ID_Rubro'].isin(['', 'nan', None])].copy()
-            elif tipo_item_receta == 'Fijo':
+                      mask_general = posibles_costos['ID_Rubro'].astype(str).str.strip().isin(['', 'nan', 'None', 'Todos']) | posibles_costos['ID_Rubro'].isna()
+                      df_candidatos = posibles_costos[mask_general].copy()
+            else: # Fijo u otros
                 df_candidatos = posibles_costos.copy()
+                
             if df_candidatos.empty: continue
+            # --- FIN DEL NUEVO MÉTODO ---
             fechas_fuente = []
             for _, candidato in df_candidatos.iterrows():
                 id_general = candidato['ID_General']; fecha_fuente = pd.NaT
@@ -260,7 +291,7 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
 
     
     # --- SECCIÓN 1: REQUERIMIENTO ORIGINAL (GLOBAL) ---
-    st.markdown("###### 1. Requerimiento Principal")
+    st.markdown("###### 1. Requerimiento Inicial")
     # --- NUEVA LÓGICA DE SELECCIÓN DE DOCUMENTO ---
     opciones_doc = ["Acta de Supervisión", "Carta", "Oficio"]
     valor_guardado = datos_hecho.get('doc_req_num', '')
@@ -295,16 +326,16 @@ def renderizar_inputs_especificos(i, df_dias_no_laborables=None):
         # Para Acta de Supervisión guardamos el nombre directamente
         datos_hecho['doc_req_num'] = tipo_doc
     
-    total_items = st.number_input("Número **total** de requerimientos de información solicitados", min_value=1, step=1,
+    total_items = st.number_input("Número **total** de requerimientos de información solicitados:", min_value=1, step=1,
                                   key=f"num_total_{i}", value=datos_hecho.get('num_items_solicitados', 1))
     datos_hecho['num_items_solicitados'] = total_items
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        fecha_solicitud = st.date_input("Fecha del requerimiento", key=f"fecha_sol_{i}", format="DD/MM/YYYY",
+        fecha_solicitud = st.date_input("Fecha del requerimiento:", key=f"fecha_sol_{i}", format="DD/MM/YYYY",
                                         value=datos_hecho.get('fecha_solicitud'))
     with col2:
-        fecha_max_entrega_orig = st.date_input("Fecha máxima de entrega", min_value=fecha_solicitud, key=f"fecha_ent_orig_{i}",
+        fecha_max_entrega_orig = st.date_input("Fecha máxima de entrega:", min_value=fecha_solicitud, key=f"fecha_ent_orig_{i}",
                                       format="DD/MM/YYYY", value=datos_hecho.get('fecha_max_entrega_orig'))
     
     dias_habiles_orig = calcular_dias_habiles(fecha_solicitud, fecha_max_entrega_orig, df_dias_no_laborables)
@@ -1053,11 +1084,13 @@ def _procesar_hecho_simple(datos_comunes, datos_hecho):
                 anexos_ce_generados.append(buffer_final_anexo)
 
         # 8. Devolver resultados
-        resultados_app = {
+        # Lo guardamos en resultados_app para que el dibujante lo lea
+        resultados_app = {'id_rubro': datos_comunes.get('id_rubro_seleccionado'),
              'extremos': [{
                   'tipo': tipo_incumplimiento, 'ce_data': ce_data_raw, 
                   'ce_soles': total_soles, 'ce_dolares': total_dolares,
                   'bi_data': res_bi.get('table_rows', []), 'bi_uit': beneficio_ilicito_uit,
+                  'diccionario_notas': {l: obtener_fuente_formateada(k, fn_data, id_infraccion, False) for l, k in nuevo_fn_map.items()}
              }],
              'totales': {
                   'ce_total_soles': total_soles, 'ce_total_dolares': total_dolares,
@@ -1293,7 +1326,7 @@ def _procesar_hecho_multiple(datos_comunes, datos_hecho):
             fn_list_ext = [f"({l}) {obtener_fuente_formateada(k, fn_data_ext, id_infraccion, es_extemporaneo_extremo)}" for l, k in sorted(nuevo_fn_map_ext.items())]
             fn_data_dict_ext = {'list': fn_list_ext, 'elaboration': 'Elaboración: Subdirección de Sanción y Gestión de Incentivos (SSAG) - DFAI.', 'style': 'FuenteTabla'}
             tabla_bi_cuerpo = create_main_table_subdoc(tpl_principal, ["Descripción", "Monto"], filas_bi_con_superindice, keys=['descripcion_texto', 'monto'], footnotes_data=fn_data_dict_ext, column_widths=(5, 1))
-
+            resultados_app['extremos'][-1]['diccionario_notas'] = {l: obtener_fuente_formateada(k, fn_data_ext, id_infraccion, es_extemporaneo_extremo) for l, k in nuevo_fn_map_ext.items()}
             # --- INICIO: LÓGICA DE TEXTO DE RAZONABILIDAD (REQ 7 - CORREGIDO) ---
             dias_plazo_texto_orig = texto_con_numero(datos_hecho.get('dias_habiles_orig', 0), genero='m')
             total_items_texto = texto_con_numero(datos_hecho.get('num_items_solicitados', 0))
