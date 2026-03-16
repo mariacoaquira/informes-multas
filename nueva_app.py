@@ -225,8 +225,6 @@ FACTORES_GRADUACION = {
     }
 }
 
-st.write(st.session_state)
-
 # --- INICIALIZACIÓN DE LA APLICACIÓN ---
 #st.set_page_config(layout="wide", page_title="Asistente de Multas")
 st.title("🤖 Asistente para la elaboración de informes de multa")
