@@ -1,5 +1,5 @@
 import ssl
-ssl._create_default_https_context = ssl._create_unverified_context
+#ssl._create_default_https_context = ssl._create_unverified_context
 import streamlit as st
 import io
 import locale
@@ -228,7 +228,7 @@ FACTORES_GRADUACION = {
 st.write(st.session_state)
 
 # --- INICIALIZACIÓN DE LA APLICACIÓN ---
-st.set_page_config(layout="wide", page_title="Asistente de Multas")
+#st.set_page_config(layout="wide", page_title="Asistente de Multas")
 st.title("🤖 Asistente para la elaboración de informes de multa")
 
 # --- INICIO: Lógica de Actualización BCRP ---
